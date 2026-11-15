@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}Satla Spirits{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ asset('catalog.css') }}">
+</head>
+<body>
+{% if g.user %}
+<header class="appbar">
+  <div class="wrap">
+    <div class="r1">
+      <a class="brand" href="{{ url_for('catalog') }}">Satla Spirits</a>
+      <form class="who" method="post" action="{{ url_for('logout') }}">
+        <span>{{ g.user['name'] }}</span>
+        <button class="link" type="submit">Sign out</button>
+      </form>
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      <a href="{{ url_for('catalog') }}" aria-current="page">Catalog</a>
+    </nav>
+  </div>
+</header>
+{% endif %}
+{% block body %}{% endblock %}
+</body>
+</html>

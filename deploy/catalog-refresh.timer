@@ -1,0 +1,8 @@
+[Unit]
+Description=Satla Catalog: refresh prices and on hand every 30 minutes
+
+[Timer]
+OnCalendar=*:07,37
+
+[Install]
+WantedBy=timers.target

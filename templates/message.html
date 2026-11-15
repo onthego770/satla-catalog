@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Satla Spirits{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  <div class="empty"><b>{{ title }}.</b><br>{{ message }}</div>
+  <div><a class="link" href="{{ url_for('catalog') }}">‹ Back to the catalog</a></div>
+</div></main>
+{% endblock %}

@@ -1,0 +1,23 @@
+# Code yes, data no (same policy as ~/python/qbo_scripts).
+
+# The live database: salesman logins (password hashes) and the price/stock snapshot.
+Catalog.db
+Catalog.db-wal
+Catalog.db-shm
+
+# Product photos: 178 grid + 178 detail WebP files. The masters are on the Mac
+# mini (~/satla-photos) and in Google Drive ("satla-photos").
+photos/
+wireframes/photos/
+
+# The original handoff bundle; its contents are already unpacked here.
+satla-catalog-handoff.zip
+
+# Secrets never live in this directory (the site key is ~/python/config/catalog_config.json),
+# but refuse a stray copy anyway.
+*config*.json
+
+__pycache__/
+*.pyc
+.DS_Store
+.claude/settings.local.json

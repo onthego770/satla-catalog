@@ -1,0 +1,135 @@
+/* Satla catalog site. Taken from the approved wireframes (wireframes/index.html):
+   same tokens, type and components, without the wireframe's page chrome, notes
+   and sample-data markers. Phone first; the wide layout starts at 700px. */
+:root{
+  color-scheme:light;
+  --paper:#eef0ec;
+  --sheet:#ffffff;
+  --ink:#1b2326;
+  --mute:#5a666a;
+  --line:#b4bcbd;
+  --fill:#e4e8e6;
+  --note:#1d4ed8;
+  --stop:#a3261e;
+  --go:#17683f;
+  --display:"Archivo","Arial Narrow",Arial,sans-serif;
+  --body:"IBM Plex Sans","Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--sheet);color:var(--ink);font:400 15px/1.45 var(--body);-webkit-text-size-adjust:100%}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--note);outline-offset:2px}
+h1,h2,h3,h4{font-family:var(--display);text-wrap:balance;margin:0}
+img{max-width:100%}
+p{margin:0}
+
+.wrap{max-width:1400px;margin:0 auto}
+
+/* app bar */
+.appbar{position:sticky;top:0;z-index:3;background:var(--sheet);border-bottom:1.5px solid var(--ink)}
+.appbar .r1{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 14px 4px}
+.brand{font:800 17px/1 var(--display);font-stretch:80%;letter-spacing:.02em;text-transform:uppercase;text-decoration:none}
+.who{font-size:12px;color:var(--mute);display:flex;gap:8px;align-items:center;margin:0}
+.link{border:0;background:none;padding:0;text-decoration:underline;text-underline-offset:2px;color:var(--ink)}
+.tabs{display:flex;gap:2px;padding:0 10px;align-items:center}
+.tabs a{padding:8px 10px 7px;font-weight:600;font-size:14px;border-bottom:3px solid transparent;color:var(--mute);text-decoration:none}
+.tabs a[aria-current="page"]{border-color:var(--ink);color:var(--ink)}
+
+.pad{padding:14px;display:flex;flex-direction:column;gap:12px}
+.col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.kosher{font-size:12px;border:1px solid var(--ink);border-radius:999px;padding:2px 9px;white-space:nowrap}
+.field{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:500}
+.inp{border:1.5px solid var(--ink);border-radius:6px;padding:9px 11px;background:var(--sheet);width:100%;min-width:0;font-size:16px}
+.srow{display:flex;gap:8px;align-items:center}
+.srow .inp{flex:1}
+.btn{border:1.5px solid var(--ink);background:var(--sheet);border-radius:6px;padding:9px 14px;font-weight:600;font-size:14px;display:inline-flex;gap:6px;align-items:center;justify-content:center}
+.btn.pri{background:var(--ink);color:#fff}
+.btn.sm{padding:5px 10px;font-size:13px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.chip{flex:none;border:1.5px solid var(--line);background:var(--sheet);border-radius:999px;padding:5px 11px;font-size:13px;white-space:nowrap}
+.chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:#fff}
+.chip.x{border-style:dashed;border-color:var(--ink)}
+.meta{font-size:12.5px;color:var(--mute)}
+.count{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.alert{border:1.5px solid var(--stop);color:var(--stop);border-radius:6px;padding:8px 11px;font-size:13.5px}
+
+/* catalog */
+.cat{display:grid;grid-template-columns:1fr;gap:14px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.card{border:1.5px solid var(--line);border-radius:8px;background:var(--sheet);padding:8px;text-align:left;display:flex;flex-direction:column;gap:5px;min-width:0;text-decoration:none}
+.card:hover{border-color:var(--ink)}
+/* The photo sits INSIDE a fixed 3:4 box and is fitted to it (contain); the photo
+   never sizes the box. An early wireframe cropped photos by getting this wrong. */
+.ph{aspect-ratio:3/4;background:#fff;border:1px solid var(--fill);border-radius:5px;overflow:hidden;display:grid;place-items:center;position:relative}
+.ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
+.ph .fb{display:none;position:absolute;inset:0;place-items:center;text-align:center;font:600 11px/1.3 var(--mono);color:var(--mute);background:
+  linear-gradient(to top right,transparent calc(50% - .5px),var(--line) 50%,transparent calc(50% + .5px)),
+  linear-gradient(to top left,transparent calc(50% - .5px),var(--line) 50%,transparent calc(50% + .5px)),var(--fill)}
+.ph .fb span{background:var(--fill);padding:2px 5px}
+.ph.noimg img{display:none}.ph.noimg .fb{display:grid}
+.eyebrow{font:600 10.5px/1.2 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--mute)}
+.card h3{font:600 14px/1.25 var(--body);overflow-wrap:anywhere}
+.tags{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.tag{font-size:11px;border:1px solid var(--ink);border-radius:3px;padding:1px 5px;white-space:nowrap}
+.empty{border:1.5px dashed var(--line);border-radius:8px;padding:22px 16px;text-align:center;color:var(--mute)}
+.filters{display:flex;flex-direction:column;gap:2px}
+.filters details{border-bottom:1px solid var(--line);padding:2px 0}
+.filters summary{font-weight:600;padding:8px 0;cursor:pointer;font-size:14px}
+.opts{display:flex;flex-direction:column;gap:2px;padding:0 0 8px;max-height:230px;overflow:auto}
+.opt{display:flex;gap:8px;align-items:center;padding:4px 2px;font-size:14px}
+.opt input{width:17px;height:17px;accent-color:var(--ink);flex:none}
+.opt span{flex:1;min-width:0}
+.opt small{color:var(--mute);font-variant-numeric:tabular-nums}
+.opt.sub{padding-left:24px}
+.alist{columns:1;display:block}
+.alist h4{font:700 15px/1 var(--display);margin:12px 0 4px;border-bottom:1px solid var(--line);padding-bottom:3px}
+.alist button{display:flex;justify-content:space-between;width:100%;border:0;background:none;padding:6px 2px;text-align:left;font-size:14.5px;border-bottom:1px dotted var(--line)}
+.alist button small{color:var(--mute)}
+
+/* product page */
+.detail{display:grid;grid-template-columns:1fr;gap:14px}
+.detail .ph{width:100%;max-width:420px;margin:0 auto}
+.detail h2{font-size:23px;font-weight:700;font-stretch:90%}
+.desc{max-width:65ch}
+.facts{display:grid;grid-template-columns:minmax(110px,40%) 1fr;border-top:1.5px solid var(--ink);font-size:14px;margin:0}
+.facts dt,.facts dd{margin:0;padding:6px 4px;border-bottom:1px solid var(--line)}
+.facts dt{color:var(--mute)}
+.facts dd{overflow-wrap:anywhere}
+.box{border:1.5px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.box h3{font:600 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--mute)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 11px/1.2 var(--mono);text-transform:uppercase;letter-spacing:.04em;color:var(--mute);border-bottom:1.5px solid var(--ink)}
+td:not(:first-child){font-variant-numeric:tabular-nums}
+.tw{overflow-x:auto}
+.asof{margin:0;padding:0;list-style:none;font-size:12.5px;color:var(--mute);display:flex;flex-direction:column;gap:2px}
+.asof .stale{color:var(--stop)}
+
+/* sign in */
+.login{max-width:340px;margin:0 auto;padding:44px 20px;display:flex;flex-direction:column;gap:14px}
+.login .brand{font-size:26px}
+
+/* filter drawer (phone) */
+.overlay{position:fixed;inset:0;z-index:10;background:rgba(27,35,38,.45);display:flex}
+.drawer{margin-left:auto;width:min(88%,340px);background:var(--sheet);height:100%;display:flex;flex-direction:column;border-left:2px solid var(--ink)}
+.drawer .hd,.drawer .ft{padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px;border-bottom:1.5px solid var(--ink)}
+.drawer .ft{border-bottom:0;border-top:1.5px solid var(--ink)}
+.drawer .bd{flex:1;overflow:auto;padding:4px 14px}
+
+/* wide layout */
+@media (min-width:700px){
+  .cat{grid-template-columns:230px minmax(0,1fr)}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(165px,1fr))}
+  .detail{grid-template-columns:minmax(220px,36%) 1fr}
+  .detail .ph{max-width:none;position:sticky;top:96px}
+  .alist{columns:3;column-gap:28px}
+  .alist h4{break-after:avoid}
+  .pad{padding:18px 22px}
+  .appbar .r1{padding-left:22px;padding-right:22px}
+  .tabs{padding:0 18px}
+}
+@media (prefers-reduced-motion:no-preference){.card,.chip{transition:border-color .12s,background .12s}}

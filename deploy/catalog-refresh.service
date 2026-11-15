@@ -1,0 +1,11 @@
+[Unit]
+Description=Satla Catalog: read prices and on hand from QuickBooks and MMK (read-only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dovid
+WorkingDirectory=/home/dovid/python/catalog
+ExecStart=/home/dovid/python/venvs/qbo311/bin/python3 /home/dovid/python/catalog/manage.py refresh
+Nice=10
+TimeoutStartSec=300

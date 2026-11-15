@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Satla Spirits{% endblock %}
+{% block body %}
+<form class="login" method="post" novalidate>
+  <span class="brand">Satla Spirits</span>
+  <p class="meta">Sales team sign-in</p>
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <label class="field" for="email">Email
+    <input class="inp" id="email" name="email" type="email" value="{{ email }}" autocomplete="username" inputmode="email" autocapitalize="none" required {% if not email %}autofocus{% endif %}>
+  </label>
+  <label class="field" for="password">Password
+    <input class="inp" id="password" name="password" type="password" autocomplete="current-password" required {% if email %}autofocus{% endif %}>
+  </label>
+  <button class="btn pri" type="submit">Sign in</button>
+  <p class="meta">Accounts are created by the office. There is no self sign-up.</p>
+</form>
+{% endblock %}

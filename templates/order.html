@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% set hide_appbar = true %}
+{% block title %}New Order · {{ c['name'] }} · Satla Spirits{% endblock %}
+{% block body %}
+<div id="view"><p class="meta pad">Loading the order…</p></div>
+<div class="wrap"><div class="pad">{% include "_qbo_asof.html" %}</div></div>
+<div id="overlay"></div>
+<form id="sendform" method="post" action="{{ info.send }}" hidden>
+  <input type="hidden" name="csrf" value="{{ form_token() }}">
+  <input type="hidden" name="order" id="sendorder">
+</form>
+<script id="odata" type="application/json">{{ {"info": info, "products": products}|tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ asset('order.js') }}"></script>{% endblock %}

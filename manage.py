@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Behind-the-scenes commands for the catalog site (there are no admin screens).
+"""Behind-the-scenes commands for the catalog site. (Logins can also be managed
+by an admin on the site's Admin page.)
 
 Run with the library's Python, by explicit path:
 
@@ -11,6 +12,8 @@ Run with the library's Python, by explicit path:
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py set-password name@example.com
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py remove-user name@example.com
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py list-users
+  ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py set-admin name@example.com on
+  ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py order-email on
 
 init           Create Catalog.db and the site's secret key. Safe to re-run.
 load-products  Load / update the products from Satla_Master_Catalog.csv. Product
@@ -18,6 +21,11 @@ load-products  Load / update the products from Satla_Master_Catalog.csv. Product
 load-pack      Fill bottles per case and ml from QuickBooks and MMK (read-only).
 refresh        Read regular prices and on hand from QuickBooks and MMK (read-only)
                into the snapshot the pages show. A timer runs this every 30 minutes.
+set-admin      Give (on) or take away (off) a login's admin rights: the Admin page.
+order-email    Switch the sending of New Order emails on or off. While it is off,
+               Send order shows the email it would send and sends nothing. The
+               email goes out from the mailbox in ~/python/config/mail_config.json
+               through the library's mail_send.send_mail().
 add-user       Create a salesman login. The password is typed at a hidden prompt;
                never put a password on the command line or in a chat.
 """
@@ -99,9 +107,7 @@ def cmd_add_user(args):
     if db.user_by_email(con, email):
         sys.exit(f"{email} already has a login. Use set-password to change it.")
     pw = _ask_password()
-    with con:
-        con.execute("INSERT INTO users (email, name, password_hash, created_at) VALUES (?,?,?,?)",
-                    (email, args.name.strip(), generate_password_hash(pw), db.now_utc()))
+    db.add_user(con, args.name, email, generate_password_hash(pw))
     print(f"login created for {args.name} <{email}>")
 
 
@@ -111,9 +117,7 @@ def cmd_set_password(args):
     if not user:
         sys.exit(f"no login for {args.email}")
     pw = _ask_password()
-    with con:
-        con.execute("UPDATE users SET password_hash=?, active=1 WHERE id=?",
-                    (generate_password_hash(pw), user["id"]))
+    db.update_user(con, user["id"], password_hash=generate_password_hash(pw), active=1)
     print(f"password changed for {user['email']}")
 
 
@@ -122,18 +126,37 @@ def cmd_remove_user(args):
     user = db.user_by_email(con, args.email)
     if not user:
         sys.exit(f"no login for {args.email}")
-    with con:
-        con.execute("DELETE FROM users WHERE id=?", (user["id"],))
+    db.remove_user(con, user["id"])
     print(f"login removed for {user['email']}")
 
 
 def cmd_list_users(_args):
     con = db.connect()
-    rows = con.execute("SELECT name, email, active, created_at FROM users ORDER BY name").fetchall()
+    rows = db.users(con)
     if not rows:
         print("no logins yet")
     for r in rows:
-        print(f"{r['name']:<28} {r['email']:<36} {'active' if r['active'] else 'OFF'}  since {r['created_at'][:10]}")
+        print(f"{r['name']:<28} {r['email']:<36} {'active' if r['active'] else 'OFF':<6} "
+              f"{'ADMIN' if r['is_admin'] else '':<5}  since {r['created_at'][:10]}")
+
+
+def cmd_set_admin(args):
+    con = db.connect()
+    user = db.user_by_email(con, args.email)
+    if not user:
+        sys.exit(f"no login for {args.email}")
+    db.update_user(con, user["id"], is_admin=int(args.state == "on"))
+    print(f"admin rights {args.state} for {user['email']}")
+
+
+def cmd_order_email(args):
+    cfg = json.loads(CONFIG_PATH.read_text())
+    cfg["order_email"] = args.state == "on"
+    tmp = CONFIG_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    tmp.chmod(0o600)
+    tmp.replace(CONFIG_PATH)
+    print(f"sending of order emails is now {args.state.upper()}")
 
 
 def main():
@@ -154,6 +177,13 @@ def main():
         sp.add_argument("email")
         sp.set_defaults(func=func)
     sub.add_parser("list-users").set_defaults(func=cmd_list_users)
+    sa = sub.add_parser("set-admin")
+    sa.add_argument("email")
+    sa.add_argument("state", choices=["on", "off"])
+    sa.set_defaults(func=cmd_set_admin)
+    oe = sub.add_parser("order-email")
+    oe.add_argument("state", choices=["on", "off"])
+    oe.set_defaults(func=cmd_order_email)
     args = p.parse_args()
     args.func(args)
 

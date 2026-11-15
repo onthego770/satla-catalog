@@ -6,7 +6,9 @@ code behind orders.satlaspirits.com). Nothing is reimplemented:
   Regular price, Florida on hand   mmk_common.get_current_inventory_qbo(qb)
                                    (column unit_price; qty_on_hand)
   Customers                        qbo.fetch_customers(qb)
-  Invoices, last 12 months         qbo.fetch_invoices_since(qb, date)
+  Invoices (all of them: the last  qbo.fetch_invoices_since(qb, date)
+    12 months are shown; older ones
+    only supply previous prices)
   Invoice line items, with SKUs    qbo.fetch_item_skus() + qbo.build_orders()
   Illinois on hand                 mmk_common.get_current_inventory_mmk()
   Bottles per case, ml             the bpc / vol_ml columns of those same two reads
@@ -39,6 +41,7 @@ COMPANIES = {"IL": ("qbo_il", "QuickBooks Illinois", None),
              "FL": ("qbo_fl", "QuickBooks Florida", FL_CONFIG)}
 MMK_SOURCE = "mmk_il"
 HISTORY_DAYS = 365          # order history: QuickBooks invoices, last 12 months
+ALL_INVOICES_FROM = "2000-01-01"   # previous prices use every invoice, however old
 
 
 def _library():
@@ -100,12 +103,18 @@ def read_mmk_stock(catalog_skus):
 
 def read_company(config_path, catalog_skus):
     """One QuickBooks company in ONE client session (one token handshake):
-    its catalog items, its customers, and its invoices for the last 12 months.
+    its catalog items, its customers, and its invoices.
 
-    Returns (items, customers, invoices). `customers` and `invoices` are rows
-    ready for Catalog.db: a customer's address is the billing address, or the
-    shipping address when there is no billing one; an invoice carries its product
-    lines as [{sku, name, qty, price, amount}], exactly as QuickBooks holds them.
+    Returns (items, customers, invoices, last_prices). `customers` and `invoices`
+    are rows ready for Catalog.db: a customer's address is the billing address,
+    or the shipping address when there is no billing one; an invoice carries its
+    product lines as [{sku, name, qty, price, amount}], exactly as QuickBooks
+    holds them. `invoices` covers the last 12 months only.
+
+    `last_prices` is {(customer_id, sku): (price, 'YYYY-MM-DD')}: for each
+    customer and catalog product, the price per case on the most recent invoice
+    that includes it, however old (wireframe rule, approved 2026-11-12). A line
+    with no price or a price of zero (a free sample) is not a previous price.
     """
     _library()
     import qbo_mmk_salesorder as qbo
@@ -114,7 +123,7 @@ def read_company(config_path, catalog_skus):
     with qbo.qbo_client(config_path) as qb:
         items = read_qbo_items(qb, catalog_skus)
         raw_customers = qbo.fetch_customers(qb)
-        raw_invoices = qbo.fetch_invoices_since(qb, since)
+        raw_invoices = qbo.fetch_invoices_since(qb, ALL_INVOICES_FROM)
         sku_map = qbo.fetch_item_skus(qb, raw_invoices)
     customers = []
     for c in raw_customers:
@@ -122,16 +131,24 @@ def read_company(config_path, catalog_skus):
         customers.append({"id": c["id"], "name": c["name"], "contact": c["contact"],
                           "phone": c["phone"], "email": c["email"], "balance": c["balance"],
                           **addr})
-    invoices = []
-    for o in qbo.build_orders(raw_invoices, "", sku_map):
+    invoices, last_prices = [], {}
+    cutoff = since.strftime("%Y-%m-%d")
+    for o in qbo.build_orders(raw_invoices, "", sku_map):       # oldest first
+        day = o["date"].strftime("%Y-%m-%d")
+        for ln in o["lines"]:
+            price = _num(ln["price"])
+            if ln["sku"] in catalog_skus and price and price > 0:
+                last_prices[(str(o["customer_id"]), ln["sku"])] = (price, day)
+        if day < cutoff:
+            continue
         invoices.append({
             "id": str(o["id"]), "doc_number": o["docnumber"], "customer_id": str(o["customer_id"]),
-            "txn_date": o["date"].strftime("%Y-%m-%d"),
+            "txn_date": day,
             "total": _num(o["total"]) or 0.0, "balance": _num(o["balance"]) or 0.0,
             "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": _num(ln["qty"]),
                        "price": _num(ln["price"]), "amount": _num(ln["amount"])}
                       for ln in o["lines"]]})
-    return items, customers, invoices
+    return items, customers, invoices, last_prices
 
 
 def refresh(log=print):
@@ -143,13 +160,13 @@ def refresh(log=print):
     results = {}
     for company, (source, label, path) in COMPANIES.items():
         try:
-            data, customers, invoices = read_company(path, catalog_skus)
-            db.replace_company(con, company, customers, invoices)
+            data, customers, invoices, last_prices = read_company(path, catalog_skus)
+            db.replace_company(con, company, customers, invoices, last_prices)
             db.save_snapshot(con, source, payload={
                 s: {"price": v["price"], "qty": v["qty"]} for s, v in data.items()})
             results[source] = data
             log(f"{label}: {len(data)} catalog items, {len(customers)} customers, "
-                f"{len(invoices)} invoices read")
+                f"{len(invoices)} invoices, {len(last_prices)} previous prices read")
         except Exception as e:                       # noqa: BLE001 - keep going
             db.save_snapshot(con, source, error=f"{type(e).__name__}: {e}")
             log(f"{label}: FAILED - {type(e).__name__}: {e}")

@@ -152,3 +152,44 @@ td:not(:first-child){font-variant-numeric:tabular-nums}
 .small{font-size:12.5px}
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 @media (min-width:700px){.cust{grid-template-columns:minmax(260px,34%) 1fr}}
+
+/* New Order, Review order, Order sent (Stage 3) and Admin */
+.subbar{position:sticky;top:0;z-index:3;background:var(--sheet);border-bottom:1.5px solid var(--ink);padding:9px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+.subbar h2{font-size:17px;font-weight:700}
+.ord{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+.ord .side{display:none}
+.oline{display:grid;grid-template-columns:44px 1fr;gap:4px 10px;padding:10px 2px;border-bottom:1px solid var(--line);align-items:start}
+.oline .ph{width:44px;height:58px;aspect-ratio:auto}
+.oline .ph .fb span{display:none}
+.oline h4{font:600 14px/1.25 var(--body);overflow-wrap:anywhere}
+.oline .qty{grid-column:2;display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:4px}
+.oline.off{opacity:.6}
+.step{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--mute)}
+.step .s{display:inline-flex;border:1.5px solid var(--ink);border-radius:6px;overflow:hidden}
+.step button{border:0;background:var(--sheet);width:40px;height:40px;font-size:18px;line-height:1}
+.step input{width:56px;border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);text-align:center;font-size:16px;padding:0;-moz-appearance:textfield;font-variant-numeric:tabular-nums}
+.step input::-webkit-outer-spin-button,.step input::-webkit-inner-spin-button{-webkit-appearance:none}
+.price{font-size:12.5px;font-variant-numeric:tabular-nums}
+.pricebox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12.5px;color:var(--mute);margin-top:5px}
+.pin{width:92px;border:1.5px solid var(--ink);border-radius:6px;padding:6px 8px;font-size:16px;text-align:right;background:var(--sheet);font-variant-numeric:tabular-nums}
+.psel{border:1.5px solid var(--ink);border-radius:6px;padding:7px 6px;font-size:13px;background:var(--sheet);color:var(--ink);max-width:100%}
+.foot{position:sticky;bottom:0;z-index:3;background:var(--sheet);border-top:1.5px solid var(--ink);padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+.foot .t{font-variant-numeric:tabular-nums}
+.foot .t b{font:700 18px/1 var(--display)}
+.btn[disabled]{opacity:.45;cursor:default}
+.mail{border:1.5px solid var(--ink);border-radius:8px;font:400 12.5px/1.5 var(--mono);padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;background:#fbfcfb}
+.okmark{width:44px;height:44px;border-radius:50%;border:2px solid var(--go);color:var(--go);display:grid;place-items:center;font-size:24px;flex:none}
+.sentline{display:flex;gap:12px;align-items:center}
+.wrapbtns{flex-wrap:wrap}
+.okbox{border:1.5px solid var(--go);color:var(--go);border-radius:6px;padding:8px 11px;font-size:13.5px}
+.dialog{margin:auto;background:var(--sheet);border:2px solid var(--ink);border-radius:10px;padding:18px;width:min(86%,330px);display:flex;flex-direction:column;gap:12px}
+.dialog .acts{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.sline{display:flex;justify-content:space-between;gap:8px;font-size:13.5px;padding:4px 0;border-bottom:1px dotted var(--line)}
+.urow{display:flex;flex-wrap:wrap;gap:8px 14px;justify-content:space-between;align-items:center;padding:10px 2px;border-bottom:1px solid var(--line)}
+.uacts{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.inp.sm{padding:5px 8px;width:150px;flex:none}
+@media (min-width:700px){
+  .ord{grid-template-columns:minmax(0,1fr) 300px}
+  .ord .side{display:flex;position:sticky;top:70px}
+  .subbar,.foot{padding-left:22px;padding-right:22px}
+}

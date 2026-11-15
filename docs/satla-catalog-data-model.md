@@ -1,6 +1,6 @@
 # Satla Catalog — Master Spec (SOURCE OF TRUTH)
 
-Version 0.36 — 2026-11-14 — Draft
+Version 0.37 — 2026-11-15 — Draft
 
 ## How to use this document (for any chat in this Project)
 - This doc is the complete, authoritative record of the Satla catalog / rep ordering system design. It is NOT a summary. Read it before answering anything about the catalog, data model, architecture or requirements.
@@ -239,6 +239,7 @@ Version 0.36 — 2026-11-14 — Draft
 - Then build plan: daily check (MMK, two QBO companies, catalog database), database, order of construction.
 
 ## Change log
+- 2026-11-15 — v0.37 — (VPS working copy.) Catalog.db: users gains is_admin (an admin manages logins on the site; Dovid 2026-11-15); new table qbo_last_prices (company, customer_id, sku, price, txn_date): what each customer last paid per case for each catalog product, from the most recent QuickBooks invoice however old, replaced by the 30-minute refresh with the customers and invoices copy. New library module ~/python/qbo_scripts/mail_send.py (send_mail, build_message) for the order email; orders are still not stored. Build plan v0.12, functional spec v0.16.
 - 2026-11-14 — v0.36 — (VPS working copy.) Stages 1 and 2 live at catalog.satlaspirits.com. Library additions for Stage 2 recorded. Finding: 95 Illinois and 212 Florida SKUs invoiced in the last 12 months are not in the catalog. Build plan v0.11.
 - 2026-11-14 — v0.35 — (VPS working copy.) Stage 1 (sign in, catalog, product page) built and tested locally; not yet live. Detail photos (178) copied to the VPS from Drive. Build plan v0.10.
 - 2026-11-14 — v0.34 — (VPS working copy.) Dovid: KOVAL products stay in the catalog; SQLite approved for Catalog.db; regular-price column added to the existing library function. Functional spec v0.15, build plan v0.9.

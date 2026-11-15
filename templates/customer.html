@@ -5,9 +5,12 @@
 {% block body %}
 <main class="wrap"><div class="pad">
   <div><a class="link" href="{{ url_for('customers') }}">‹ All customers</a></div>
-  <div>
-    <h2 class="title">{{ c['name'] }}</h2>
-    <span class="meta">QuickBooks company: {{ company_name }} <span class="st">{{ c['company'] }}</span></span>
+  <div class="count">
+    <div>
+      <h2 class="title">{{ c['name'] }}</h2>
+      <span class="meta">QuickBooks company: {{ company_name }} <span class="st">{{ c['company'] }}</span></span>
+    </div>
+    <a class="btn pri" href="{{ url_for('order', company=c['company'], cid=c['id']) }}">New Order</a>
   </div>
   <div class="cust">
     <div class="col">
@@ -36,6 +39,7 @@
       {% else %}
       <p class="meta">No invoices in the last 12 months.</p>
       {% endif %}
+      <p class="meta">Orders sent by email appear here after the office invoices them in QuickBooks.</p>
     </div>
   </div>
   {% include "_qbo_asof.html" %}

@@ -1,5 +1,6 @@
 """catalog.satlaspirits.com: the salesman catalog site (Stage 1: sign in, catalog,
-product page; Stage 2: customers, customer page with order history, invoice).
+product page; Stage 2: customers, customer page with order history, invoice;
+Stage 3: New Order and Copy Order, sent as an email; Admin page for logins).
 
 Run by gunicorn as the systemd service `catalog-web` (127.0.0.1:5001) behind
 Caddy, the same arrangement as orders.satlaspirits.com.
@@ -9,10 +10,15 @@ on hand come from the snapshot that `manage.py refresh` stores on a timer (see
 catalog_live.py), so a page view cannot disturb the QuickBooks token or the MMK
 login. Nothing on the site is visible without signing in.
 
+An order is never stored: it lives in the salesman's browser until Send, and
+Send turns it into one email through the library's mail_send.send_mail().
+
 Local test over plain http: CATALOG_WEB_INSECURE=1 (relaxes the HTTPS-only cookie).
 """
 import json
 import os
+import secrets
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -21,13 +27,16 @@ from zoneinfo import ZoneInfo
 from flask import (Flask, abort, g, redirect, render_template, request,
                    send_from_directory, session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import catalog_db as db
 
 CONFIG_PATH = db.ROOT.parent / "config" / "catalog_config.json"
 PHOTO_DIR = db.ROOT / "photos"
 OFFICE_TZ = ZoneInfo("America/Chicago")
+LIBRARY = db.ROOT.parent / "qbo_scripts"          # the existing API library
+ORDER_TO = "florida@satlaspirits.com"             # the office (decided 2026-11-12)
+MIN_PASSWORD = 8
 
 app = Flask(__name__)
 # Behind Caddy: trust one proxy hop so the visitor's address (login throttle) and
@@ -76,6 +85,33 @@ def _close_db(_exc):
         con.close()
 
 
+@app.before_request
+def _check_form_token():
+    """Every form a signed-in person posts must carry the token this site put
+    in the page, so another website cannot post on their behalf."""
+    if request.method == "POST" and g.user is not None:
+        sent = request.form.get("csrf") or ""
+        if not secrets.compare_digest(sent, session.get("csrf") or "-"):
+            abort(400)
+
+
+def _form_token():
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_urlsafe(24)
+    return session["csrf"]
+
+
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if g.user is None:
+            return redirect(url_for("login", next=request.full_path.rstrip("?")))
+        if not g.user["is_admin"]:
+            abort(404)
+        return view(*args, **kwargs)
+    return wrapped
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -92,7 +128,7 @@ def _asset_version():
     def asset(name):
         path = db.ROOT / "static" / name
         return url_for("static", filename=name, v=int(path.stat().st_mtime))
-    return {"asset": asset}
+    return {"asset": asset, "form_token": _form_token}
 
 
 @app.after_request
@@ -318,6 +354,213 @@ def invoice(company, iid):
                            customer_name=c["name"] if c else "Customer",
                            company_name=COMPANY_NAMES[company],
                            sources=_qbo_sources((company,)))
+
+
+# --- New Order and Copy Order (Stage 3) ----------------------------------------
+# The order is built in the salesman's browser (static/order.js) and is never
+# stored here. Send posts it once; this side checks every line again against
+# Catalog.db, writes the email and hands it to the library's mail_send.
+
+def _order_products(company, cid):
+    """Every catalog product as the order screen needs it for one customer:
+    `reg` is the regular price per case in the customer's own QuickBooks company
+    (None = cannot be ordered), `prev` is what this customer last paid, `hand`
+    is cases on hand (Illinois: MMK; Florida: QuickBooks Florida)."""
+    prices = db.snapshot(g.db, COMPANY_SOURCE[company])["data"] or {}
+    mmk = db.snapshot(g.db, "mmk_il")["data"] if company == "IL" else None
+    last = db.last_prices(g.db, company, cid)
+    out = []
+    for r in db.all_products(g.db):
+        sku = r["sku"]
+        item = prices.get(sku) or {}
+        if company == "IL":
+            hand = None if mmk is None else (mmk.get(sku) or 0)
+        else:
+            hand = item.get("qty")
+        prev = last.get(sku)
+        out.append({"sku": sku, "name": r["name"], "size": r["size"], "brand": r["brand"],
+                    "cat": r["category"], "grape": r["grape"], "country": r["country"],
+                    "region": r["region"], "reg": item.get("price"),
+                    "hand": _cases(hand) if hand is not None else None,
+                    "prev": {"p": prev["price"], "d": _day(prev["date"])} if prev else None})
+    return out
+
+
+def _order_sources(company):
+    names = (("Regular prices: QuickBooks " + COMPANY_NAMES[company], COMPANY_SOURCE[company]),
+             ("On hand: MMK", "mmk_il") if company == "IL" else None)
+    out = []
+    for label, source in filter(None, names):
+        snap = db.snapshot(g.db, source)
+        out.append({"label": label, "as_of": _when(snap["fetched_at"]), "stale": not snap["ok"]})
+    return out
+
+
+@app.route("/order/<any(IL, FL):company>/<cid>")
+@login_required
+def order(company, cid):
+    c = db.customer(g.db, company, cid)
+    if c is None:
+        abort(404)
+    copy = None
+    iid = request.args.get("copy")
+    if iid:
+        v = db.invoice(g.db, company, iid)
+        if v is None or v["customer_id"] != cid:
+            abort(404)
+        copy = {"doc": v["doc_number"],
+                "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": ln["qty"]}
+                          for ln in json.loads(v["lines"])]}
+    info = {"co": company, "id": cid, "name": c["name"], "state": COMPANY_NAMES[company],
+            "to": ORDER_TO, "me": g.user["email"], "copy": copy,
+            "back": url_for("customer", company=company, cid=cid),
+            "send": url_for("order_send", company=company, cid=cid),
+            "nonce": secrets.token_urlsafe(12)}
+    return render_template("order.html", c=c, info=info, sources=_order_sources(company),
+                           products=_order_products(company, cid))
+
+
+def _checked_order(company, cid, payload):
+    """The posted order, checked line by line against Catalog.db. Returns
+    (lines, note) or raises ValueError with a message for the salesman."""
+    products = {p["sku"]: p for p in _order_products(company, cid)}
+    raw = payload.get("lines")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("The order has no lines.")
+    lines, seen = [], set()
+    for ln in raw[:300]:
+        p = products.get(str(ln.get("sku")))
+        if p is None or p["sku"] in seen:
+            raise ValueError("The order holds a product that is not in the catalog.")
+        seen.add(p["sku"])
+        if p["reg"] is None:
+            raise ValueError(f"{p['name']} has no regular price in QuickBooks "
+                             f"{COMPANY_NAMES[company]}, so it cannot be ordered.")
+        try:
+            cases, price = round(float(ln.get("cases")), 2), round(float(ln.get("price")), 2)
+        except (TypeError, ValueError):
+            raise ValueError(f"{p['name']}: the cases or the price is not a number.")
+        if not 0 < cases <= 9999 or not 0 <= price <= 99999:
+            raise ValueError(f"{p['name']}: check the cases and the price.")
+        if p["prev"] and abs(price - p["prev"]["p"]) < 0.005:
+            src = "previous price"
+        elif abs(price - p["reg"]) < 0.005:
+            src = "regular price"
+        else:
+            src = "typed price"
+        lines.append({"p": p, "cases": cases, "price": price, "src": src,
+                      "total": round(cases * price, 2)})
+    return lines, str(payload.get("note") or "").strip()[:2000]
+
+
+def _order_email(c, company, lines, note):
+    """(subject, body) of the order email, in the layout approved in the
+    wireframes (screen 9)."""
+    today = datetime.now(OFFICE_TZ).strftime("%b %-d, %Y")
+    subject = f"New order — {c['name']} — {today}"
+    rows = [f"{ln['p']['sku']}  {ln['p']['name']} ({ln['p']['size']})\n"
+            f"   {_cases(ln['cases'])} {'case' if ln['cases'] == 1 else 'cases'} @ "
+            f"{money(ln['price'])} per case ({ln['src']}) = {money(ln['total'])}" for ln in lines]
+    body = (f"Customer: {c['name']} ({COMPANY_NAMES[company]})\n"
+            f"Salesman: {g.user['name']} <{g.user['email']}>\n\n" + "\n".join(rows) +
+            f"\n\nOrder total: {money(sum(ln['total'] for ln in lines))}\n"
+            f"Note: {note or 'none'}\n")
+    return subject, body
+
+
+def _send_order_email(subject, body):
+    """Send through the library (mail_send.send_mail). Returns None when sent, or
+    the reason it was not. Sending stays off until the owner switches it on
+    (`manage.py order-email on`): the message goes out from the business mailbox."""
+    try:
+        enabled = json.loads(CONFIG_PATH.read_text()).get("order_email") is True
+    except (OSError, ValueError):
+        enabled = False
+    if not enabled:
+        return "Sending order emails is not switched on yet."
+    if str(LIBRARY) not in sys.path:
+        sys.path.insert(0, str(LIBRARY))
+    import mail_send                               # stdlib only; no QuickBooks, no MMK
+    from pipeline_errors import PipelineError
+    try:
+        mail_send.send_mail(ORDER_TO, subject, body, cc=g.user["email"],
+                            reply_to=g.user["email"], from_name="Satla Catalog orders")
+    except PipelineError as e:
+        return str(e)
+    return None
+
+
+@app.route("/order/<any(IL, FL):company>/<cid>/send", methods=["POST"])
+@login_required
+def order_send(company, cid):
+    c = db.customer(g.db, company, cid)
+    if c is None:
+        abort(404)
+    back = url_for("order", company=company, cid=cid)
+    ctx = {"c": c, "back": back, "to": ORDER_TO, "cc": g.user["email"],
+           "customer_url": url_for("customer", company=company, cid=cid),
+           "draft_key": f"satla.order.v1.{company}.{cid}"}
+    try:
+        payload = json.loads(request.form.get("order") or "")
+        lines, note = _checked_order(company, cid, payload)
+    except (ValueError, AttributeError) as e:
+        return render_template("sent.html", sent=False, problem=str(e), **ctx), 400
+    nonce = str(payload.get("nonce") or "")
+    if nonce and nonce in session.get("sent", []):
+        return render_template("sent.html", sent=False, repeat=True, **ctx)
+    subject, body = _order_email(c, company, lines, note)
+    problem = _send_order_email(subject, body)
+    if problem is None and nonce:
+        session["sent"] = (session.get("sent", []) + [nonce])[-5:]
+    return render_template("sent.html", sent=problem is None, problem=problem,
+                           subject=subject, body=body, **ctx)
+
+
+# --- Admin: logins (owner, 2026-11-15) -----------------------------------------
+
+@app.route("/admin/users", methods=["GET", "POST"])
+@admin_required
+def admin_users():
+    note = error = None
+    if request.method == "POST":
+        f = request.form
+        action = f.get("action")
+        if action == "add":
+            name, email, pw = (f.get("name") or "").strip(), (f.get("email") or "").strip().lower(), f.get("password") or ""
+            if not name or "@" not in email:
+                error = "Enter a name and an email address."
+            elif len(pw) < MIN_PASSWORD:
+                error = f"The password needs at least {MIN_PASSWORD} characters."
+            elif db.user_by_email(g.db, email):
+                error = f"{email} already has a login."
+            else:
+                db.add_user(g.db, name, email, generate_password_hash(pw), f.get("is_admin") == "1")
+                note = f"Login created for {name}."
+        else:
+            user = db.user_by_id(g.db, f.get("uid"))
+            if user is None:
+                abort(404)
+            me = user["id"] == g.user["id"]
+            if action == "password":
+                pw = f.get("password") or ""
+                if len(pw) < MIN_PASSWORD:
+                    error = f"The password needs at least {MIN_PASSWORD} characters."
+                else:
+                    db.update_user(g.db, user["id"], password_hash=generate_password_hash(pw))
+                    note = f"Password changed for {user['name']}."
+            elif action in ("active", "admin"):
+                field = "active" if action == "active" else "is_admin"
+                turn_on = f.get("value") == "1"
+                if me and not turn_on:
+                    error = "You cannot switch off your own login or your own admin rights."
+                else:
+                    db.update_user(g.db, user["id"], **{field: int(turn_on)})
+                    what = "Login" if action == "active" else "Admin rights"
+                    note = f"{what} switched {'on' if turn_on else 'off'} for {user['name']}."
+            else:
+                abort(400)
+    return render_template("admin.html", users=db.users(g.db), note=note, error=error,
+                           min_password=MIN_PASSWORD), (400 if error else 200)
 
 
 # --- photos (behind the login, like everything else) ---------------------------

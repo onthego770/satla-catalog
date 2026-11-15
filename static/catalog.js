@@ -89,9 +89,7 @@
   const baseList = () => P.filter(p => menuMatch(p) && qMatch(p, S.q));
 
   /* ---------- view parts ---------- */
-  function photo(p) {
-    return '<div class="ph"><img loading="lazy" width="600" height="800" src="/photo/grid/' + encodeURIComponent(p.sku) + '.webp" alt="" onerror="this.parentNode.classList.add(\'noimg\')"><div class="fb"><span>Photo</span></div></div>';
-  }
+  const photo = p => window.Satla.photo(p.sku);
   function badges(p) {
     return '<div class="tags">' + (p.mev === "Yes" ? '<span class="tag">Mevushal</span>' : "") + (p.kfp === "Yes" ? '<span class="tag">Kosher for Passover</span>' : "") + (p.org === "Yes" ? '<span class="tag">Organic</span>' : "") + "</div>";
   }

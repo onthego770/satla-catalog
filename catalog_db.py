@@ -9,8 +9,9 @@ Tables:
                  fields, bottles per case, ml. First loaded from
                  Satla_Master_Catalog.csv (`manage.py load-products`); bottles per
                  case and ml are filled from QuickBooks / MMK (`manage.py load-pack`).
-  users          Salesman logins (email, name, hashed password). Entered by hand
-                 with `manage.py add-user`. There is no sign-up and no admin screen.
+  users          Logins (email, name, hashed password, is_admin). There is no
+                 sign-up. An admin (owner, 2026-11-15) manages logins on the
+                 site's Admin page; `manage.py add-user` still works too.
   live_snapshot  The LAST READ of regular prices and quantity on hand from
                  QuickBooks (Illinois, Florida) and MMK. This is a cache of a read,
                  not item data: `manage.py refresh` rewrites it on a timer and the
@@ -20,6 +21,10 @@ Tables:
   qbo_invoices   address, contact, balance) and of its invoices for the last 12
                  months with their line items. Also a cache of a read: the same
                  timer replaces both tables, per company, each time it runs.
+  qbo_last_prices  What each customer last paid per case for each product: the
+                 most recent QuickBooks invoice, however old, that includes it.
+                 The New Order screen starts each price here ("previous price").
+                 Replaced by the same timer, with the two tables above.
                  Customers and orders come from QuickBooks only (owner,
                  2026-11-14); KOVAL customers and orders live only in MMK and are
                  never read, so they cannot appear here.
@@ -69,7 +74,8 @@ CREATE TABLE IF NOT EXISTS users (
     name          TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     active        INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    is_admin      INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS qbo_customers (
     company TEXT NOT NULL,          -- 'IL' or 'FL': which QuickBooks company
@@ -98,6 +104,14 @@ CREATE TABLE IF NOT EXISTS qbo_invoices (
 );
 CREATE INDEX IF NOT EXISTS qbo_invoices_by_customer
     ON qbo_invoices (company, customer_id, txn_date);
+CREATE TABLE IF NOT EXISTS qbo_last_prices (
+    company     TEXT NOT NULL,
+    customer_id TEXT NOT NULL,
+    sku         TEXT NOT NULL,
+    price       REAL NOT NULL,      -- per case, as on the invoice line
+    txn_date    TEXT NOT NULL,      -- YYYY-MM-DD of that invoice
+    PRIMARY KEY (company, customer_id, sku)
+);
 CREATE TABLE IF NOT EXISTS live_snapshot (
     source       TEXT PRIMARY KEY,
     attempted_at TEXT,
@@ -152,6 +166,10 @@ def init():
     with con:
         con.execute("PRAGMA journal_mode=WAL")   # the web reads while the timer writes
         con.executescript(SCHEMA)
+        # Columns added after the first release (CREATE TABLE IF NOT EXISTS does
+        # not add a column to a table that already exists).
+        if "is_admin" not in {r["name"] for r in con.execute("PRAGMA table_info(users)")}:
+            con.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
     con.close()
     DB_PATH.chmod(0o600)                          # holds password hashes
 
@@ -181,6 +199,40 @@ def user_by_email(con, email):
 
 def user_by_id(con, uid):
     return con.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+
+
+def users(con):
+    """Every login, by name."""
+    return con.execute("SELECT * FROM users ORDER BY name COLLATE NOCASE").fetchall()
+
+
+def add_user(con, name, email, password_hash, is_admin=False):
+    """Create a login. The caller hashes the password (werkzeug) and has already
+    checked that the email is free."""
+    with con:
+        con.execute("INSERT INTO users (email, name, password_hash, created_at, is_admin) "
+                    "VALUES (?,?,?,?,?)", (email.strip().lower(), name.strip(),
+                                           password_hash, now_utc(), int(bool(is_admin))))
+
+
+def update_user(con, uid, **fields):
+    """Change a login: any of password_hash, active, is_admin, name."""
+    allowed = {"password_hash", "active", "is_admin", "name"}
+    if not fields or set(fields) - allowed:
+        raise ValueError(f"update_user takes only {sorted(allowed)}")
+    with con:
+        con.execute(f"UPDATE users SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
+                    (*fields.values(), uid))
+
+
+def remove_user(con, uid):
+    with con:
+        con.execute("DELETE FROM users WHERE id=?", (uid,))
+
+
+def admin_count(con):
+    """How many active admins there are (the last one cannot be switched off)."""
+    return con.execute("SELECT COUNT(*) FROM users WHERE is_admin=1 AND active=1").fetchone()[0]
 
 
 # --- live snapshot ----------------------------------------------------------
@@ -215,12 +267,18 @@ def snapshot(con, source):
 
 # --- QuickBooks customers and invoices (a cache of the last read) -----------
 
-def replace_company(con, company, customers, invoices):
-    """Swap in one company's freshly read customers and invoices, all or nothing,
-    so a page never sees half of a read."""
+def replace_company(con, company, customers, invoices, last_prices):
+    """Swap in one company's freshly read customers, invoices and last prices,
+    all or nothing, so a page never sees half of a read. `last_prices` is
+    {(customer_id, sku): (price, 'YYYY-MM-DD')}."""
     with con:
         con.execute("DELETE FROM qbo_customers WHERE company = ?", (company,))
         con.execute("DELETE FROM qbo_invoices WHERE company = ?", (company,))
+        con.execute("DELETE FROM qbo_last_prices WHERE company = ?", (company,))
+        con.executemany(
+            "INSERT INTO qbo_last_prices (company, customer_id, sku, price, txn_date) "
+            "VALUES (?,?,?,?,?)",
+            [(company, cid, sku, price, day) for (cid, sku), (price, day) in last_prices.items()])
         con.executemany(
             "INSERT INTO qbo_customers (company, id, name, street, city, state, zip, "
             "contact, phone, email, balance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -255,3 +313,11 @@ def customer_invoices(con, company, cid):
 def invoice(con, company, iid):
     return con.execute("SELECT * FROM qbo_invoices WHERE company = ? AND id = ?",
                        (company, iid)).fetchone()
+
+
+def last_prices(con, company, cid):
+    """{sku: {'price', 'date'}}: what this customer last paid per case for each
+    product, from the most recent QuickBooks invoice that includes it."""
+    return {r["sku"]: {"price": r["price"], "date": r["txn_date"]} for r in con.execute(
+        "SELECT sku, price, txn_date FROM qbo_last_prices WHERE company = ? AND customer_id = ?",
+        (company, cid))}

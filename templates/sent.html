@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% set section = 'customers' %}
+{% block title %}{{ 'Order emailed' if sent else 'Order not sent' }} · Satla Spirits{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  {% if sent %}
+  <div class="sentline"><div class="okmark">✓</div><div><h2 class="title">Order emailed</h2>
+    <span class="meta">To {{ to }}, with a copy to {{ cc }} (you).</span></div></div>
+  {% elif repeat %}
+  <p class="alert" role="alert"><b>This order was already sent.</b> It was not sent a second time.</p>
+  {% else %}
+  <p class="alert" role="alert"><b>The order was NOT sent.</b> {{ problem }}</p>
+  {% endif %}
+  {% if body %}
+  <div class="mail">To: {{ to }}
+Cc: {{ cc }}
+Subject: {{ subject }}
+
+{{ body }}</div>
+  {% endif %}
+  {% if sent %}
+  <p class="meta">This order is not saved here. It shows in the customer's order history after the office invoices it in QuickBooks.</p>
+  <div class="srow wrapbtns">
+    <a class="btn pri" href="{{ customer_url }}">Back to {{ c['name'] }}</a>
+    <a class="btn" href="{{ back }}">Start another order</a>
+  </div>
+  {% elif repeat %}
+  <div><a class="btn pri" href="{{ customer_url }}">Back to {{ c['name'] }}</a></div>
+  {% else %}
+  <p class="meta">Your order is still on the order screen; nothing was lost.</p>
+  <div><a class="btn pri" href="{{ back }}">Back to the order</a></div>
+  {% endif %}
+</div></main>
+{% endblock %}
+{% block scripts %}{% if sent or repeat %}<script>try { sessionStorage.removeItem({{ draft_key|tojson }}); } catch (e) {}</script>{% endif %}{% endblock %}

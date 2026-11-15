@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% set section = 'customers' %}
+{% block title %}Invoice {{ v['doc_number'] }} · Satla Spirits{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  <div><a class="link" href="{{ url_for('customer', company=v['company'], cid=v['customer_id']) }}">‹ {{ customer_name }}</a></div>
+  <div>
+    <h2 class="title">Invoice {{ v['doc_number'] }}</h2>
+    <span class="meta">{{ date }} · <span class="{{ 'open' if is_open else 'paid' }}">{{ 'Open' if is_open else 'Paid' }}</span>{% if is_open %} ({{ v['balance']|money }} owed){% endif %} · QuickBooks {{ company_name }}</span>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+      {% for l in lines %}
+      <tr>
+        <td>{% if l.in_catalog %}<a href="{{ url_for('product', sku=l.sku) }}">{{ l.name }}</a>{% else %}{{ l.name }}{% endif %}{% if l.detail %}<br><span class="meta">{{ l.detail }}</span>{% endif %}</td>
+        <td class="num">{{ l.qty }}</td><td class="num">{{ l.price }}</td><td class="num">{{ l.amount }}</td>
+      </tr>
+      {% endfor %}
+      {% if adjustment %}
+      <tr><td colspan="3">Discount, tax or other adjustment</td><td class="num">{{ adjustment|money }}</td></tr>
+      {% endif %}
+      <tr><td colspan="3" class="num"><b>Total</b></td><td class="num"><b>{{ v['total']|money }}</b></td></tr>
+    </tbody>
+  </table></div>
+  <p class="meta">Read-only copy of the QuickBooks invoice.</p>
+  {% include "_qbo_asof.html" %}
+</div></main>
+{% endblock %}

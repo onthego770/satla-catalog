@@ -3,7 +3,7 @@
 Owner's rule (2026-11-13): "QBO will be read for invoicing. MMK will be read for
 QTY on HAND. Our Catalog.db will hold all the item data."
 
-Three tables:
+Tables:
 
   products       One row per Satla SKU. The item data: names, descriptions, filter
                  fields, bottles per case, ml. First loaded from
@@ -16,6 +16,13 @@ Three tables:
                  not item data: `manage.py refresh` rewrites it on a timer and the
                  pages show its "as of" time. Nothing here is ever written back to
                  QuickBooks or MMK.
+  qbo_customers  The LAST READ of each QuickBooks company's customers (name,
+  qbo_invoices   address, contact, balance) and of its invoices for the last 12
+                 months with their line items. Also a cache of a read: the same
+                 timer replaces both tables, per company, each time it runs.
+                 Customers and orders come from QuickBooks only (owner,
+                 2026-11-14); KOVAL customers and orders live only in MMK and are
+                 never read, so they cannot appear here.
 
 This module has no third-party imports, so the web worker stays small. Everything
 that talks to QuickBooks or MMK lives in catalog_live.py and goes through the
@@ -64,6 +71,33 @@ CREATE TABLE IF NOT EXISTS users (
     active        INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS qbo_customers (
+    company TEXT NOT NULL,          -- 'IL' or 'FL': which QuickBooks company
+    id      TEXT NOT NULL,          -- QuickBooks Customer Id (per company)
+    name    TEXT,
+    street  TEXT,
+    city    TEXT,
+    state   TEXT,
+    zip     TEXT,
+    contact TEXT,
+    phone   TEXT,
+    email   TEXT,
+    balance REAL,
+    PRIMARY KEY (company, id)
+);
+CREATE TABLE IF NOT EXISTS qbo_invoices (
+    company     TEXT NOT NULL,
+    id          TEXT NOT NULL,      -- QuickBooks Invoice Id (per company)
+    doc_number  TEXT,
+    customer_id TEXT,
+    txn_date    TEXT,               -- YYYY-MM-DD
+    total       REAL,
+    balance     REAL,               -- 0 = paid
+    lines       TEXT,               -- JSON: [{sku, name, qty, price, amount}]
+    PRIMARY KEY (company, id)
+);
+CREATE INDEX IF NOT EXISTS qbo_invoices_by_customer
+    ON qbo_invoices (company, customer_id, txn_date);
 CREATE TABLE IF NOT EXISTS live_snapshot (
     source       TEXT PRIMARY KEY,
     attempted_at TEXT,
@@ -177,3 +211,47 @@ def snapshot(con, source):
     return {"data": json.loads(r["payload"]) if r["payload"] else None,
             "fetched_at": r["fetched_at"], "attempted_at": r["attempted_at"],
             "ok": bool(r["ok"]), "error": r["error"]}
+
+
+# --- QuickBooks customers and invoices (a cache of the last read) -----------
+
+def replace_company(con, company, customers, invoices):
+    """Swap in one company's freshly read customers and invoices, all or nothing,
+    so a page never sees half of a read."""
+    with con:
+        con.execute("DELETE FROM qbo_customers WHERE company = ?", (company,))
+        con.execute("DELETE FROM qbo_invoices WHERE company = ?", (company,))
+        con.executemany(
+            "INSERT INTO qbo_customers (company, id, name, street, city, state, zip, "
+            "contact, phone, email, balance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [(company, c["id"], c["name"], c["street"], c["city"], c["state"], c["zip"],
+              c["contact"], c["phone"], c["email"], c["balance"]) for c in customers])
+        con.executemany(
+            "INSERT INTO qbo_invoices (company, id, doc_number, customer_id, txn_date, "
+            "total, balance, lines) VALUES (?,?,?,?,?,?,?,?)",
+            [(company, v["id"], v["doc_number"], v["customer_id"], v["txn_date"],
+              v["total"], v["balance"], json.dumps(v["lines"])) for v in invoices])
+
+
+def customers(con):
+    """Every customer of both companies, by name."""
+    rows = con.execute("SELECT company, id, name, city, state FROM qbo_customers").fetchall()
+    return sorted(rows, key=lambda r: (r["name"] or "").casefold())
+
+
+def customer(con, company, cid):
+    return con.execute("SELECT * FROM qbo_customers WHERE company = ? AND id = ?",
+                       (company, cid)).fetchone()
+
+
+def customer_invoices(con, company, cid):
+    """A customer's invoices, newest first."""
+    return con.execute(
+        "SELECT * FROM qbo_invoices WHERE company = ? AND customer_id = ? "
+        "ORDER BY txn_date DESC, CAST(doc_number AS INTEGER) DESC",
+        (company, cid)).fetchall()
+
+
+def invoice(con, company, iid):
+    return con.execute("SELECT * FROM qbo_invoices WHERE company = ? AND id = ?",
+                       (company, iid)).fetchone()

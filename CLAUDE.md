@@ -1,13 +1,13 @@
 # Satla catalog and salesman ordering site
 
-This directory is where the site for catalog.satlaspirits.com gets built. Stage 1 (sign in, catalog, product page) was built 2026-11-14; Stages 2 and 3 are not built.
+This directory is where the site for catalog.satlaspirits.com gets built. Stages 1 (sign in, catalog, product page) and 2 (customers, order history, invoice) are live as of 2026-11-14; Stage 3 (New Order by email, Copy Order) is not built.
 
-## What is here (Stage 1)
+## What is here
 - `catalog_web.py`: the Flask site. Reads only `Catalog.db`; never calls QuickBooks or MMK.
-- `catalog_db.py`: Catalog.db schema and queries (products, users, live_snapshot).
+- `catalog_db.py`: Catalog.db schema and queries (products, users, live_snapshot, and qbo_customers / qbo_invoices: a read-only copy of QuickBooks customers and 12 months of invoices, replaced by the refresh timer).
 - `catalog_live.py`: the read-only QuickBooks / MMK reads, all through the library in `~/python/qbo_scripts`.
 - `manage.py`: init, load-products, load-pack, refresh, add-user, set-password, remove-user, list-users. Run with `~/python/venvs/qbo311/bin/python3 /home/dovid/python/catalog/manage.py <command>`.
-- `templates/`, `static/`: pages, styles and the catalog script (taken from the approved wireframes).
+- `templates/`, `static/`: pages, styles and scripts (taken from the approved wireframes). `static/common.js` holds the helpers every page script shares; do not copy them into a page script.
 - `photos/grid`, `photos/detail`: 178 photos each, named `<SKU>.webp`.
 - `deploy/`: service, refresh timer, Caddy site and `install.sh`. Service `catalog-web` on 127.0.0.1:5001; timer `catalog-refresh` every 30 minutes. After changing Python code or templates: `sudo systemctl restart catalog-web`.
 - No new packages: it runs on the existing `qbo311` environment. Do not `pip install` into it.

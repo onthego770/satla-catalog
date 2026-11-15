@@ -8,9 +8,7 @@
 (function () {
   const P = JSON.parse(document.getElementById("pdata").textContent);
   const view = document.getElementById("view"), ovl = document.getElementById("overlay");
-  const $ = s => document.querySelector(s);
-  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-  const norm = s => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const {esc, norm, wordsMatch, load, save: store} = window.Satla;
   const sid = s => String(s).replace(/[^a-zA-Z0-9]+/g, "_");
 
   P.forEach(p => {
@@ -42,17 +40,13 @@
   const KEY = "satla.catalog.v1";
   const wideQuery = window.matchMedia("(min-width:700px)");
   const S = {q: "", menu: "all", sub: null, f: blankF(), openF: {country: true}, drawer: false, wide: wideQuery.matches, scroll: 0};
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(KEY) || "null");
-    if (saved) {
-      S.q = saved.q || ""; S.sub = saved.sub || null; S.scroll = saved.scroll || 0;
-      if (MENU.some(m => m[0] === saved.menu)) S.menu = saved.menu;
-      Object.assign(S.f, saved.f || {}); Object.assign(S.openF, saved.openF || {});
-    }
-  } catch (e) { /* a private window may refuse storage; the page works without it */ }
-  function save() {
-    try { sessionStorage.setItem(KEY, JSON.stringify({q: S.q, menu: S.menu, sub: S.sub, f: S.f, openF: S.openF, scroll: window.scrollY})); } catch (e) { /* see above */ }
+  const saved = load(KEY);
+  if (saved) {
+    S.q = saved.q || ""; S.sub = saved.sub || null; S.scroll = saved.scroll || 0;
+    if (MENU.some(m => m[0] === saved.menu)) S.menu = saved.menu;
+    Object.assign(S.f, saved.f || {}); Object.assign(S.openF, saved.openF || {});
   }
+  function save() { store(KEY, {q: S.q, menu: S.menu, sub: S.sub, f: S.f, openF: S.openF, scroll: window.scrollY}); }
 
   /* ---------- catalog logic ---------- */
   function menuMatch(p) {
@@ -67,7 +61,7 @@
       default: return true;
     }
   }
-  const qMatch = (p, q) => norm(q).split(/\s+/).filter(Boolean).every(t => p.hay.includes(t));
+  const qMatch = (p, q) => wordsMatch(p.hay, q);
   function fMatch(p, skip) {
     for (const g of FG.concat([REGION])) {
       if (g.k === skip) continue;

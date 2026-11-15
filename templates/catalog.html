@@ -4,5 +4,5 @@
 <main class="wrap"><div class="pad" id="view"><p class="meta">Loading the catalog…</p></div></main>
 <div id="overlay"></div>
 <script id="pdata" type="application/json">{{ products|tojson }}</script>
-<script src="{{ asset('catalog.js') }}"></script>
 {% endblock %}
+{% block scripts %}<script src="{{ asset('catalog.js') }}"></script>{% endblock %}

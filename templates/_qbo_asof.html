@@ -1,0 +1,5 @@
+<ul class="asof">
+  {% for s in sources %}
+  <li{% if s.stale %} class="stale"{% endif %}>{{ s.label }}: read from QuickBooks{% if s.as_of %} as of <time datetime="{{ s.as_of.iso }}">{{ s.as_of.text }}</time>{% else %}, not read yet{% endif %}{% if s.stale and s.as_of %}. The latest read did not succeed, so this is the last known copy{% endif %}.</li>
+  {% endfor %}
+</ul>

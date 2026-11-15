@@ -3,8 +3,11 @@
 Every call here goes through the existing library in ~/python/qbo_scripts (the
 code behind orders.satlaspirits.com). Nothing is reimplemented:
 
-  Regular price, Florida on hand   mmk_common.get_current_inventory_qbo(config_path)
+  Regular price, Florida on hand   mmk_common.get_current_inventory_qbo(qb)
                                    (column unit_price; qty_on_hand)
+  Customers                        qbo.fetch_customers(qb)
+  Invoices, last 12 months         qbo.fetch_invoices_since(qb, date)
+  Invoice line items, with SKUs    qbo.fetch_item_skus() + qbo.build_orders()
   Illinois on hand                 mmk_common.get_current_inventory_mmk()
   Bottles per case, ml             the bpc / vol_ml columns of those same two reads
 
@@ -22,6 +25,7 @@ Two rules inherited from the library's notes:
     known figures with their time.
 """
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import catalog_db as db
@@ -29,10 +33,12 @@ import catalog_db as db
 LIBRARY = Path.home() / "python" / "qbo_scripts"
 FL_CONFIG = Path.home() / "python" / "config" / "qbo_config_fl.json"
 
-# source key -> (plain name, QuickBooks config path or None for the default IL one)
-QBO_SOURCES = {"qbo_il": ("QuickBooks Illinois", None),
-               "qbo_fl": ("QuickBooks Florida", FL_CONFIG)}
+# company code -> (snapshot source key, plain name, QuickBooks config path;
+# None is the library's default, the Illinois company)
+COMPANIES = {"IL": ("qbo_il", "QuickBooks Illinois", None),
+             "FL": ("qbo_fl", "QuickBooks Florida", FL_CONFIG)}
 MMK_SOURCE = "mmk_il"
+HISTORY_DAYS = 365          # order history: QuickBooks invoices, last 12 months
 
 
 def _library():
@@ -50,15 +56,16 @@ def _num(value):
     return float(value)
 
 
-def read_qbo_items(config_path, catalog_skus):
-    """{sku: {price, qty, bpc, ml}} for the catalog's SKUs in one QuickBooks company.
+def read_qbo_items(qb, catalog_skus):
+    """{sku: {price, qty, bpc, ml}} for the catalog's SKUs in one QuickBooks
+    company (`qb` is a client from qbo.qbo_client()).
 
     `price` is the regular price per case (None when QuickBooks has none set);
     `qty` is quantity on hand in cases (None for a non-inventory item). Where
     QuickBooks holds two items with the same SKU, the active Inventory one wins.
     """
     mc = _library()
-    df = mc.get_current_inventory_qbo(config_path=config_path)
+    df = mc.get_current_inventory_qbo(qb=qb)
     df = df[df["sku"].isin(catalog_skus)].copy()
     df["_rank"] = (df["active"].fillna(False).astype(bool) * 2
                    + (df["type"] == "Inventory") * 1)
@@ -91,19 +98,58 @@ def read_mmk_stock(catalog_skus):
                     "ml": _num(r.vol_ml)} for r in df.itertuples()}
 
 
+def read_company(config_path, catalog_skus):
+    """One QuickBooks company in ONE client session (one token handshake):
+    its catalog items, its customers, and its invoices for the last 12 months.
+
+    Returns (items, customers, invoices). `customers` and `invoices` are rows
+    ready for Catalog.db: a customer's address is the billing address, or the
+    shipping address when there is no billing one; an invoice carries its product
+    lines as [{sku, name, qty, price, amount}], exactly as QuickBooks holds them.
+    """
+    _library()
+    import qbo_mmk_salesorder as qbo
+
+    since = date.today() - timedelta(days=HISTORY_DAYS)
+    with qbo.qbo_client(config_path) as qb:
+        items = read_qbo_items(qb, catalog_skus)
+        raw_customers = qbo.fetch_customers(qb)
+        raw_invoices = qbo.fetch_invoices_since(qb, since)
+        sku_map = qbo.fetch_item_skus(qb, raw_invoices)
+    customers = []
+    for c in raw_customers:
+        addr = c["billing"] if (c["billing"]["street"] or c["billing"]["city"]) else c["shipping"]
+        customers.append({"id": c["id"], "name": c["name"], "contact": c["contact"],
+                          "phone": c["phone"], "email": c["email"], "balance": c["balance"],
+                          **addr})
+    invoices = []
+    for o in qbo.build_orders(raw_invoices, "", sku_map):
+        invoices.append({
+            "id": str(o["id"]), "doc_number": o["docnumber"], "customer_id": str(o["customer_id"]),
+            "txn_date": o["date"].strftime("%Y-%m-%d"),
+            "total": _num(o["total"]) or 0.0, "balance": _num(o["balance"]) or 0.0,
+            "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": _num(ln["qty"]),
+                       "price": _num(ln["price"]), "amount": _num(ln["amount"])}
+                      for ln in o["lines"]]})
+    return items, customers, invoices
+
+
 def refresh(log=print):
-    """Read all three sources and store them in live_snapshot. One source failing
-    does not stop the others; a failure keeps that source's last good figures."""
+    """Read every source and store it in Catalog.db. One source failing does not
+    stop the others; a failure keeps that source's last good figures."""
+    db.init()                                        # creates any missing table
     con = db.connect()
     catalog_skus = db.skus(con)
     results = {}
-    for source, (label, path) in QBO_SOURCES.items():
+    for company, (source, label, path) in COMPANIES.items():
         try:
-            data = read_qbo_items(path, catalog_skus)
+            data, customers, invoices = read_company(path, catalog_skus)
+            db.replace_company(con, company, customers, invoices)
             db.save_snapshot(con, source, payload={
                 s: {"price": v["price"], "qty": v["qty"]} for s, v in data.items()})
             results[source] = data
-            log(f"{label}: {len(data)} catalog items read")
+            log(f"{label}: {len(data)} catalog items, {len(customers)} customers, "
+                f"{len(invoices)} invoices read")
         except Exception as e:                       # noqa: BLE001 - keep going
             db.save_snapshot(con, source, error=f"{type(e).__name__}: {e}")
             log(f"{label}: FAILED - {type(e).__name__}: {e}")

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set section = 'customers' %}
+{% block title %}{{ c['name'] }} · Satla Spirits{% endblock %}
+{% macro val(v) %}{% if v %}{{ v }}{% else %}<span class="meta">—</span>{% endif %}{% endmacro %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  <div><a class="link" href="{{ url_for('customers') }}">‹ All customers</a></div>
+  <div>
+    <h2 class="title">{{ c['name'] }}</h2>
+    <span class="meta">QuickBooks company: {{ company_name }} <span class="st">{{ c['company'] }}</span></span>
+  </div>
+  <div class="cust">
+    <div class="col">
+      <div class="box"><h3>Balance owed</h3><div class="big">{{ c['balance']|money }}</div></div>
+      <div class="box"><h3>Address and contact</h3>
+        <dl class="kv">
+          <dt>Address</dt><dd>{{ val(address) }}</dd>
+          <dt>Contact</dt><dd>{{ val(c['contact']) }}</dd>
+          <dt>Phone</dt><dd>{% if c['phone'] %}<a href="tel:{{ c['phone'] }}">{{ c['phone'] }}</a>{% else %}<span class="meta">—</span>{% endif %}</dd>
+          <dt>Email</dt><dd>{% if c['email'] %}<a href="mailto:{{ c['email'] }}">{{ c['email'] }}</a>{% else %}<span class="meta">—</span>{% endif %}</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="box">
+      <h3>Order history: QuickBooks invoices, last 12 months</h3>
+      {% if invoices %}
+      <div class="list plain">
+        {% for v in invoices %}
+        <a class="rowbtn" href="{{ url_for('invoice', company=c['company'], iid=v.id) }}">
+          <b>Invoice {{ v.doc_number }}</b>
+          <span class="meta">{{ v.date }} · {{ v.items }} {{ 'item' if v.items == 1 else 'items' }}</span>
+          <span class="end">{{ v.total|money }}<br><span class="{{ 'open' if v.open else 'paid' }} small">{{ 'Open' if v.open else 'Paid' }}</span></span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="meta">No invoices in the last 12 months.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% include "_qbo_asof.html" %}
+</div></main>
+{% endblock %}

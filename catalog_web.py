@@ -1,5 +1,5 @@
 """catalog.satlaspirits.com: the salesman catalog site (Stage 1: sign in, catalog,
-product page).
+product page; Stage 2: customers, customer page with order history, invoice).
 
 Run by gunicorn as the systemd service `catalog-web` (127.0.0.1:5001) behind
 Caddy, the same arrangement as orders.satlaspirits.com.
@@ -234,6 +234,90 @@ def product(sku):
         ("Kosher certifier", p["certifier"]), ("SKU", p["sku"]),
     ]
     return render_template("product.html", p=p, facts=facts, live=_state_figures(sku))
+
+
+# --- customers and order history (Stage 2) ------------------------------------
+# Everything here is the last copy read from QuickBooks (both companies) by the
+# refresh timer. Customers and orders come from QuickBooks only, so KOVAL
+# customers and orders, which live only in MMK, never appear.
+
+COMPANY_NAMES = {"IL": "Illinois", "FL": "Florida"}
+COMPANY_SOURCE = {"IL": "qbo_il", "FL": "qbo_fl"}
+
+
+@app.template_filter("money")
+def money(value):
+    """$1,234.50; a negative amount as -$20.00."""
+    value = value or 0
+    return f"{'-' if value < 0 else ''}${abs(value):,.2f}"
+
+
+def _day(iso_date):
+    """'2026-11-03' as 'Nov 3, 2026'."""
+    return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%b %-d, %Y")
+
+
+def _qbo_sources(companies):
+    out = []
+    for code in companies:
+        snap = db.snapshot(g.db, COMPANY_SOURCE[code])
+        out.append({"label": COMPANY_NAMES[code], "as_of": _when(snap["fetched_at"]),
+                    "stale": not snap["ok"]})
+    return out
+
+
+@app.route("/customers")
+@login_required
+def customers():
+    rows = [{"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
+             "st": r["state"]} for r in db.customers(g.db)]
+    return render_template("customers.html", customers=rows,
+                           sources=_qbo_sources(("IL", "FL")))
+
+
+@app.route("/customer/<any(IL, FL):company>/<cid>")
+@login_required
+def customer(company, cid):
+    c = db.customer(g.db, company, cid)
+    if c is None:
+        abort(404)
+    invoices = [{"id": v["id"], "doc_number": v["doc_number"], "date": _day(v["txn_date"]),
+                 "items": len(json.loads(v["lines"])), "total": v["total"],
+                 "open": (v["balance"] or 0) > 0.004}
+                for v in db.customer_invoices(g.db, company, cid)]
+    place = " ".join(x for x in (", ".join(x for x in (c["city"], c["state"]) if x), c["zip"]) if x)
+    address = ", ".join(x for x in (c["street"], place) if x)
+    return render_template("customer.html", c=c, address=address, invoices=invoices,
+                           company_name=COMPANY_NAMES[company],
+                           sources=_qbo_sources((company,)))
+
+
+@app.route("/invoice/<any(IL, FL):company>/<iid>")
+@login_required
+def invoice(company, iid):
+    v = db.invoice(g.db, company, iid)
+    if v is None:
+        abort(404)
+    c = db.customer(g.db, company, v["customer_id"])
+    lines, product_sum = [], 0.0
+    for ln in json.loads(v["lines"]):
+        p = db.product(g.db, ln["sku"]) if ln["sku"] else None
+        product_sum += ln["amount"] or 0
+        # A catalog product shows its SKU and size; anything else (QuickBooks has
+        # many items that are not in the catalog) shows its QuickBooks name only.
+        detail = " · ".join(x for x in (ln["sku"], p["size"] if p else "") if x)
+        lines.append({"name": ln["name"], "sku": ln["sku"], "in_catalog": p is not None,
+                      "detail": detail,
+                      "qty": _cases(ln["qty"]) if ln["qty"] is not None else "",
+                      "price": money(ln["price"]) if ln["price"] is not None else "",
+                      "amount": money(ln["amount"]) if ln["amount"] is not None else ""})
+    adjustment = round((v["total"] or 0) - product_sum, 2)
+    return render_template("invoice.html", v=v, lines=lines, date=_day(v["txn_date"]),
+                           is_open=(v["balance"] or 0) > 0.004,
+                           adjustment=adjustment if abs(adjustment) >= 0.01 else None,
+                           customer_name=c["name"] if c else "Customer",
+                           company_name=COMPANY_NAMES[company],
+                           sources=_qbo_sources((company,)))
 
 
 # --- photos (behind the login, like everything else) ---------------------------

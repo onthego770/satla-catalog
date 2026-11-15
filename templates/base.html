@@ -21,11 +21,14 @@
       </form>
     </div>
     <nav class="tabs" aria-label="Sections">
-      <a href="{{ url_for('catalog') }}" aria-current="page">Catalog</a>
+      <a href="{{ url_for('catalog') }}"{% if section != 'customers' %} aria-current="page"{% endif %}>Catalog</a>
+      <a href="{{ url_for('customers') }}"{% if section == 'customers' %} aria-current="page"{% endif %}>Customers</a>
     </nav>
   </div>
 </header>
 {% endif %}
 {% block body %}{% endblock %}
+<script src="{{ asset('common.js') }}"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

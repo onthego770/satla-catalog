@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% set section = 'admin' %}{% set admin_page = 'history' %}
+{% block title %}Item history · Satla Spirits{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  {% include "_admin_nav.html" %}
+  <h2 class="title">Item history</h2>
+  {% if note %}<p class="okbox" role="status">{{ note }}</p>{% endif %}
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <p class="meta">Every change made to a catalog item on the site, newest first. Undo puts the item back as it was before that change, photo included. Only the latest change to an item can be undone.</p>
+  <div class="list">
+    {% for c in rows %}
+    <div class="urow">
+      <div>
+        <b>{% if c['in_catalog'] %}<a href="{{ url_for('admin_item', sku=c['sku']) }}">{{ c['name'] }}</a>{% else %}{{ c['name'] }}{% endif %}</b> <span class="st">{{ c['sku'] }}</span>
+        <br><span class="meta"><time datetime="{{ c['when'].iso }}">{{ c['when'].text }}</time> · {{ c['user_name'] }}</span>
+        {% for line in c['what'] %}<br><span class="small">{{ line }}</span>{% endfor %}
+      </div>
+      {% if c['undo'] %}
+      <form method="post" class="uacts">
+        <input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="id" value="{{ c['id'] }}">
+        <button class="btn sm" type="submit">Undo</button>
+      </form>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="empty">No item has been changed on the site yet.</div>
+    {% endfor %}
+  </div>
+</div></main>
+{% endblock %}

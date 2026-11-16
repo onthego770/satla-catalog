@@ -121,3 +121,4 @@ Legacy columns (from the earlier tool; may be stale — do NOT trust for status)
 - I-DE33 is Delta Sigma Fusion red with a Delta Eta Fusion photo, page and possibly description. No rename while in test mode.
 - "New Arrivals" has no rule: the dataset has no arrival date or "new" flag.
 - Next steps are in claude/satla-build-plan.md, starting with Stage 0.
+- UPDATE 2026-11-16 (VPS working copy): the catalog file now holds 178 products. Since the 178 of 2026-11-13: `I-AD132` re-keyed to `I-AD136` (Adir NOVEMBER In Box) and a new `I-AD132` (Adir Marselan Red (M)) added, 2026-11-15; `I-AD02R-23` deleted 2026-11-16 at Dovid's word ("it was a mistake"). The photo masters do not have these changes. Product counts by category elsewhere in this file are from the first 178.

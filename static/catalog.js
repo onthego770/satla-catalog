@@ -90,7 +90,7 @@
   const baseList = () => P.filter(p => menuMatch(p) && qMatch(p, S.q));
 
   /* ---------- view parts ---------- */
-  const photo = p => window.Satla.photo(p.sku);
+  const photo = p => window.Satla.photo(p.sku, p.pv);
   function badges(p) {
     return '<div class="tags">' + (p.mev === "Yes" ? '<span class="tag">Mevushal</span>' : "") + (p.org === "Yes" ? '<span class="tag">Organic</span>' : "") + (p.x ? '<span class="tag">Not in catalog</span>' : "") + "</div>";
   }

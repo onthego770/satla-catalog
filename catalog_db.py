@@ -9,6 +9,14 @@ Tables:
                  fields, bottles per case, ml. First loaded from
                  Satla_Master_Catalog.csv (`manage.py load-products`); bottles per
                  case and ml are filled from QuickBooks / MMK (`manage.py load-pack`).
+                 Since 2026-11-16 this table is the MASTER: admins edit, add and
+                 delete items on the site (catalog_items.py), and the file is
+                 rewritten from it after every change. `photo_v` changes when
+                 the product's photo does, so browsers fetch the new one.
+  product_changes  The history of those changes: who, when, the row before and
+                 after (JSON; NULL = no catalog entry), and whether the photos
+                 changed (the earlier ones are kept in photos/history/<id>/).
+                 The History page undoes a change from it.
   users          Logins (email, name, hashed password, is_admin, states). `states`
                  is the comma-separated list of state codes the login may use
                  ("IL,FL"; owner, 2026-11-15). There is no sign-up. An admin (owner, 2026-11-15) manages logins on the
@@ -72,8 +80,22 @@ CREATE TABLE IF NOT EXISTS products (
     qbo_item_id      TEXT,
     bottles_per_case REAL,
     bottle_ml        REAL,
-    pack_source      TEXT
+    pack_source      TEXT,
+    photo_v          INTEGER             -- set when the photo changes (cache key); NULL = never changed
 );
+CREATE TABLE IF NOT EXISTS product_changes (
+    id        INTEGER PRIMARY KEY,
+    at        TEXT NOT NULL,             -- UTC, as now_utc()
+    user_id   INTEGER,
+    user_name TEXT,
+    sku       TEXT NOT NULL,
+    action    TEXT NOT NULL,             -- 'add', 'edit', 'delete', 'undo'
+    before    TEXT,                      -- JSON of the products row; NULL = was not in the catalog
+    after     TEXT,                      -- JSON of the products row; NULL = no longer in the catalog
+    photo     INTEGER NOT NULL DEFAULT 0, -- 1 = new photos put in, 2 = photos removed; the earlier ones are in photos/history/<id>/
+    undoes    INTEGER                    -- for an 'undo': the id of the change it took back
+);
+CREATE INDEX IF NOT EXISTS product_changes_by_sku ON product_changes (sku, id);
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
@@ -130,6 +152,14 @@ CREATE TABLE IF NOT EXISTS live_snapshot (
 );
 """
 
+# CSV column -> products column: the pack figures, which the file gained when
+# Catalog.db became the master (2026-11-16), so the file is a complete copy.
+CSV_PACK_COLUMNS = {
+    "Bottles per Case": "bottles_per_case",
+    "Bottle ml": "bottle_ml",
+    "Pack Source": "pack_source",
+}
+
 # CSV column -> products column. Only the columns the handoff marks "use".
 CSV_COLUMNS = {
     "Satla SKU": "sku",
@@ -182,6 +212,8 @@ def init():
             # Logins made before states existed saw everything: they keep both.
             con.execute("ALTER TABLE users ADD COLUMN states TEXT NOT NULL DEFAULT ''")
             con.execute("UPDATE users SET states = 'IL,FL'")
+        if "photo_v" not in {r["name"] for r in con.execute("PRAGMA table_info(products)")}:
+            con.execute("ALTER TABLE products ADD COLUMN photo_v INTEGER")
         if "salesman" not in {r["name"] for r in con.execute("PRAGMA table_info(qbo_customers)")}:
             # Filled by the next refresh; until then only admins see customers.
             con.execute("ALTER TABLE qbo_customers ADD COLUMN salesman TEXT")
@@ -268,9 +300,11 @@ def inv_source(state):
 
 
 def extra_source(state):
-    """Snapshot key of a state's items that have NO catalog entry:
-    {sku: {name, ml, bpc}}. Empty unless the state lists its whole inventory
-    (`catalog_all` in the library's STATES)."""
+    """Snapshot key of what a state's inventory system says about EVERY item it
+    holds, with or without a catalog entry: {sku: {name, ml, bpc}}. It is where
+    an item with no catalog entry gets its name, and what an admin adds an item
+    from. (The key says "extra" because it first held only the items with no
+    catalog entry.)"""
     return "extra_" + state.lower()
 
 
@@ -298,24 +332,32 @@ def state_products(con, state):
 
     A state's products are the catalog products that have a record in its
     inventory (snapshot inv_<st>), then, for a state that lists its whole
-    inventory, the items with no catalog entry (snapshot extra_<st>): those
-    carry only what the inventory system knows (SKU, name, bottle size, bottles
-    per case), every other column is None, and `uncataloged` is True.
-    `mevushal` follows the name: see mevushal()."""
+    inventory (`catalog_all` in the library's STATES), the items with no
+    catalog entry: see uncataloged(). `mevushal` follows the name: see mevushal()."""
     have = snapshot(con, inv_source(state))["data"] or {}
-    extra = snapshot(con, extra_source(state))["data"] or {}
-    rows = con.execute("SELECT * FROM products").fetchall()
-    columns = [d[0] for d in con.execute("SELECT * FROM products LIMIT 0").description]
-    out = [dict(r, uncataloged=False) for r in rows if r["sku"] in have]
-    catalog = {r["sku"] for r in rows}
-    for sku, v in extra.items():
-        if sku in have and sku not in catalog:
-            out.append(dict(dict.fromkeys(columns), sku=sku, name=v["name"] or sku,
-                            size=_size(v["ml"]), bottles_per_case=v["bpc"],
-                            bottle_ml=v["ml"], uncataloged=True))
+    out = [dict(r, uncataloged=False) for r in con.execute("SELECT * FROM products")
+           if r["sku"] in have]
+    if (states(con).get(state) or {}).get("catalog_all"):
+        out += uncataloged(con, state)
     for p in out:
         p["mevushal"] = mevushal(p["name"], p["mevushal"])
     return sorted(out, key=lambda r: ((r["brand"] or "") + (r["name"] or "")).casefold())
+
+
+def uncataloged(con, state):
+    """The items of a state's inventory that have NO catalog entry, as product
+    dicts: they carry only what the inventory system knows (SKU, name, bottle
+    size, bottles per case), every other column is None, and `uncataloged` is
+    True. A state that lists its whole inventory shows them (state_products());
+    for every state they are what an admin can add to the catalog."""
+    have = snapshot(con, inv_source(state))["data"] or {}
+    extra = snapshot(con, extra_source(state))["data"] or {}
+    catalog = skus(con)
+    columns = [d[0] for d in con.execute("SELECT * FROM products LIMIT 0").description]
+    return [dict(dict.fromkeys(columns), sku=sku, name=v["name"] or sku,
+                 size=_size(v["ml"]), bottles_per_case=v["bpc"],
+                 bottle_ml=v["ml"], uncataloged=True)
+            for sku, v in extra.items() if sku in have and sku not in catalog]
 
 
 def state_product(con, state, sku):
@@ -325,9 +367,10 @@ def state_product(con, state, sku):
 
 
 def states(con):
-    """{code: {'name', 'inventory'}} for every state the last refresh knew, in
-    the library's order. `inventory` names the system that holds that state's
-    inventory ("MMK", "QuickBooks Florida")."""
+    """{code: {'name', 'inventory', 'catalog_all'}} for every state the last
+    refresh knew, in the library's order. `inventory` names the system that
+    holds that state's inventory ("MMK", "QuickBooks Florida"); `catalog_all`
+    is True for a state whose catalog lists every item of that inventory."""
     return snapshot(con, STATES_SOURCE)["data"] or {}
 
 

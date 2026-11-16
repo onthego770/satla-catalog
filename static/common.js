@@ -7,8 +7,10 @@ window.Satla = {
   norm: s => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
   /* True when every word typed appears in the prepared text `hay`. */
   wordsMatch: (hay, q) => window.Satla.norm(q).split(/\s+/).filter(Boolean).every(t => hay.includes(t)),
-  /* A product's small photo in its fixed 3:4 box, with a fallback when the file is missing. */
-  photo: sku => '<div class="ph"><img loading="lazy" width="600" height="800" src="/photo/grid/' + encodeURIComponent(sku) + '.webp" alt="" onerror="this.parentNode.classList.add(\'noimg\')"><div class="fb"><span>Photo</span></div></div>',
+  /* A product's small photo in its fixed 3:4 box, with a fallback when the file is missing.
+     `v` is the product's photo version (set when an admin changes the photo), so
+     a new photo is fetched at once instead of after the browser's 24-hour keep. */
+  photo: (sku, v) => '<div class="ph"><img loading="lazy" width="600" height="800" src="/photo/grid/' + encodeURIComponent(sku) + '.webp' + (v ? "?v=" + v : "") + '" alt="" onerror="this.parentNode.classList.add(\'noimg\')"><div class="fb"><span>Photo</span></div></div>',
   /* $1,234.50 */
   money: n => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}),
   /* Small per-tab memory, so Back returns to the same search and position.

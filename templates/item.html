@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set section = 'admin' %}
+{% block title %}{{ 'Add' if adding else 'Edit' }} {{ p['sku'] }} · Satla Spirits{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  <div><a class="link" href="{{ url_for('admin_items') if adding else url_for('product', sku=p['sku']) }}">‹ Back without saving</a></div>
+  <h2 class="title">{{ 'Add to catalog' if adding else 'Edit item' }} <span class="st">{{ p['sku'] }}</span></h2>
+  {% if adding %}<p class="meta">This item has no catalog entry yet. The name, bottle size and bottles per case below are what the inventory system holds; change them as you like, fill in the rest, and press Save.</p>{% endif %}
+  {% for problem in problems %}<p class="alert" role="alert">{{ problem }}</p>{% endfor %}
+  <div class="box" id="sourcebox" data-url="{{ url_for('admin_source') }}" data-csrf="{{ form_token() }}" data-sku="{{ p['sku'] }}">
+    <h3>Fill from Kosher Wine World</h3>
+    <div class="srow">
+      <input class="inp" id="source-url" type="url" inputmode="url" placeholder="https://kosherwineworld.com/products/…" aria-label="Address of the product page on kosherwineworld.com" autocomplete="off">
+      <button class="btn" type="button" id="source-go">Fetch</button>
+    </div>
+    <p class="meta" id="source-msg" role="status">Paste the address of this product's page on kosherwineworld.com and press Fetch. Blank fields are filled in from it (details, description, photo); where you already have a value you get a button instead. Nothing is saved until you press {{ 'Add to catalog' if adding else 'Save' }}.</p>
+    <div class="uacts" id="source-acts"></div>
+  </div>
+  <div class="cust">
+    <div class="box" id="photobox" data-grid="{{ sizes['grid']|join('x') }}" data-detail="{{ sizes['detail']|join('x') }}">
+      <h3>Photo</h3>
+      <div class="ph{% if not has_photo %} noimg{% endif %}" id="photo-now">
+        <img {% if has_photo %}src="{{ url_for('photo', kind='detail', name=p['sku'] ~ '.webp', v=p['photo_v']) }}" {% endif %}alt="" width="900" height="1200">
+        <div class="fb"><span>No photo</span></div>
+      </div>
+      <label class="field" for="photo-src">Choose a new picture<input class="inp" id="photo-src" type="file" accept="image/*"></label>
+      <p class="meta" id="photo-msg" role="status">Any picture of the product on a white or plain background. The site trims it, centres it on white and sizes it like every other catalog photo. Nothing changes until you press Save.</p>
+      <input type="file" name="photo_grid" id="photo-grid" form="itemform" hidden>
+      <input type="file" name="photo_detail" id="photo-detail" form="itemform" hidden>
+      {% if has_photo %}<label class="opt"><input type="checkbox" name="photo_remove" value="1" form="itemform"><span>Remove the photo</span></label>{% endif %}
+    </div>
+    <div class="col">
+      <form class="box" method="post" enctype="multipart/form-data" id="itemform" autocomplete="off">
+        <h3>Item data</h3>
+        <input type="hidden" name="csrf" value="{{ form_token() }}">
+        <input type="hidden" name="action" value="save">
+        <div class="fgrid">
+        {% for col, label, kind, longest in fields %}
+          {% set v = p[col] %}
+          <label class="field{% if kind == 'long' or col == 'name' %} wide{% endif %}" for="f-{{ col }}">{{ label }}
+          {% if kind == 'long' %}<textarea class="inp" id="f-{{ col }}" name="{{ col }}" rows="6" maxlength="{{ longest }}">{{ v or '' }}</textarea>
+          {% elif kind == 'yesno' %}<select class="inp" id="f-{{ col }}" name="{{ col }}">
+            <option value=""{% if not v %} selected{% endif %}>(blank)</option>
+            <option value="Yes"{% if v == 'Yes' %} selected{% endif %}>Yes</option>
+            <option value="No"{% if v == 'No' %} selected{% endif %}>No</option></select>
+          {% elif kind == 'number' %}<input class="inp" id="f-{{ col }}" name="{{ col }}" inputmode="decimal" value="{{ '%g'|format(v) if v else '' }}">
+          {% else %}<input class="inp" id="f-{{ col }}" name="{{ col }}" value="{{ v or '' }}" maxlength="{{ longest }}"{% if col == 'name' %} required{% endif %}{% if col in suggest %} list="dl-{{ col }}"{% endif %}>
+          {% endif %}
+          {% if col == 'name' %}
+            {% for system, name in names %}<span class="meta">{{ system }} calls it: {{ name }}</span>{% endfor %}
+            <span class="meta">Changing the name changes it in the catalog only. QuickBooks and MMK keep their own names.</span>
+          {% elif col == 'category' %}<span class="meta">Category and Type decide where the item sits in the menu.</span>
+          {% elif col == 'grape' %}<span class="meta">More than one: separate with commas.</span>
+          {% elif col == 'size' %}<span class="meta">For example 750 ml or 1.5 L.</span>
+          {% elif col == 'mevushal' %}<span class="meta">A name with (M) or Mevushal always counts as Mevushal.</span>
+          {% elif col == 'kfp' %}<span class="meta">Every Wine counts as Kosher for Passover, whatever is set here.</span>
+          {% endif %}
+          </label>
+        {% endfor %}
+        </div>
+        {% for col, values in suggest.items() %}<datalist id="dl-{{ col }}">{% for value in values %}<option value="{{ value }}">{% endfor %}</datalist>{% endfor %}
+        <p class="meta">SKU, regular price, cases on hand and customers are not edited here: they come from QuickBooks and MMK.</p>
+        <div class="srow"><button class="btn pri" type="submit" id="save">{{ 'Add to catalog' if adding else 'Save' }}</button></div>
+      </form>
+      {% if not adding %}
+      <form class="box" method="post">
+        <h3>Delete from catalog</h3>
+        <input type="hidden" name="csrf" value="{{ form_token() }}">
+        <input type="hidden" name="action" value="delete">
+        <p class="meta">Removes the catalog entry and its photo from the site. Nothing is deleted in QuickBooks or MMK. It can be undone on the Item history page.</p>
+        <label class="opt"><input type="checkbox" name="sure" value="1"><span>Yes, delete {{ p['name'] }} from the catalog</span></label>
+        <div class="srow"><button class="btn" type="submit">Delete</button></div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div></main>
+{% endblock %}
+{% block scripts %}<script src="{{ asset('item.js') }}"></script>{% endblock %}

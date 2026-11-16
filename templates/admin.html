@@ -1,8 +1,9 @@
 {% extends "base.html" %}
-{% set section = 'admin' %}
+{% set section = 'admin' %}{% set admin_page = 'users' %}
 {% block title %}Admin · Satla Spirits{% endblock %}
 {% block body %}
 <main class="wrap"><div class="pad">
+  {% include "_admin_nav.html" %}
   <h2 class="title">Logins</h2>
   {% if note %}<p class="okbox" role="status">{{ note }}</p>{% endif %}
   {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}

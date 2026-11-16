@@ -79,8 +79,8 @@ def read_company(state, qb, skus):
     and its invoices.
 
     Returns (items, customers, invoices, last_prices). `items` is
-    {sku: {price, bpc, ml}}; `price` is the regular price per case (None when
-    QuickBooks has none set). `customers` and `invoices`
+    {sku: {price, bpc, ml, name}}; `price` is the regular price per case (None
+    when QuickBooks has none set), `name` what that company calls the item. `customers` and `invoices`
     are rows ready for Catalog.db: a customer's address is the billing address,
     or the shipping address when there is no billing one, and `salesman` is the
     customer's SALESMAN custom field ('' when blank); an invoice carries its
@@ -97,7 +97,8 @@ def read_company(state, qb, skus):
 
     since = date.today() - timedelta(days=HISTORY_DAYS)
     prices = mc.get_regular_prices(state, qb=qb)
-    items = {r.sku: {"price": _num(r.unit_price), "bpc": _num(r.bpc), "ml": _num(r.vol_ml)}
+    items = {r.sku: {"price": _num(r.unit_price), "bpc": _num(r.bpc), "ml": _num(r.vol_ml),
+                     "name": r.name}
              for r in _wanted(prices, skus).itertuples()}
     raw_customers = qbo.fetch_customers(qb)
     custom = qbo.fetch_customer_custom_fields(qb)
@@ -135,14 +136,19 @@ def refresh(log=print):
     stop the others; a failure keeps that source's last good figures.
 
     Stored per state (codes come from the library's STATES): snapshot
-    `qbo_<st>` = {sku: {price}}, snapshot `inv_<st>` = {sku: cases on hand} for
-    the products that state has, and its customers / invoices / last prices.
-    Snapshot `states` is the list of states itself, for the web pages.
+    `qbo_<st>` = {sku: {price, name}} for every item of that state's QuickBooks
+    company, snapshot `inv_<st>` = {sku: cases on hand} for every item of that
+    state's inventory, snapshot `extra_<st>` = {sku: {name, ml, bpc}} = what
+    the inventory system says about each of those items, and the company's
+    customers / invoices / last prices. Snapshot `states` is the list of states
+    itself, for the web pages, with each state's `catalog_all` flag.
 
-    A state whose STATES row says `catalog_all` lists every item of its
-    inventory, not only the catalog's products: snapshot `extra_<st>` =
-    {sku: {name, ml, bpc}} holds the ones with no catalog entry (empty for any
-    other state), so the pages can show them and say what is missing.
+    EVERY item is stored, with or without a catalog entry (since 2026-11-16):
+    an admin can add an item to the catalog or delete one on the site, and the
+    pages must be right at once, not at the next refresh. Which items a state
+    SHOWS is decided when a page is built (db.state_products()): the catalog
+    products its inventory holds, plus, for a `catalog_all` state, the items
+    with no catalog entry.
     """
     mc = _library()
     import qbo_mmk_salesorder as qbo
@@ -151,7 +157,8 @@ def refresh(log=print):
     con = db.connect()
     catalog_skus = db.skus(con)
     db.save_snapshot(con, db.STATES_SOURCE, payload={
-        code: {"name": info["name"], "inventory": info["inventory_name"]}
+        code: {"name": info["name"], "inventory": info["inventory_name"],
+               "catalog_all": bool(info.get("catalog_all"))}
         for code, info in mc.STATES.items()})
     results = {}
 
@@ -159,14 +166,14 @@ def refresh(log=print):
         """Read and store one state's inventory; never raises."""
         source = db.inv_source(state)
         try:
-            data = read_inventory(state, keep, qb=qb)
-            extra = {s: {"name": v["name"], "ml": v["ml"], "bpc": v["bpc"]}
-                     for s, v in data.items() if s not in catalog_skus}
+            data = read_inventory(state, None, qb=qb)
+            extra = sum(1 for s in data if s not in catalog_skus)
             db.save_snapshot(con, source, payload={s: v["cases"] for s, v in data.items()})
-            db.save_snapshot(con, db.extra_source(state), payload=extra)
+            db.save_snapshot(con, db.extra_source(state), payload={
+                s: {"name": v["name"], "ml": v["ml"], "bpc": v["bpc"]} for s, v in data.items()})
             results[source] = data
-            log(f"{label} inventory ({info['inventory_name']}): {len(data) - len(extra)} catalog "
-                f"products, {len(extra)} items with no catalog entry, "
+            log(f"{label} inventory ({info['inventory_name']}): {len(data) - extra} catalog "
+                f"products, {extra} items with no catalog entry, "
                 f"{sum(1 for v in data.values() if v['cases'])} in stock")
         except Exception as e:                       # noqa: BLE001 - keep going
             db.save_snapshot(con, source, error=f"{type(e).__name__}: {e}")
@@ -174,14 +181,13 @@ def refresh(log=print):
 
     for state, info in mc.STATES.items():
         source, label = db.qbo_source(state), info["name"]
-        keep = None if info.get("catalog_all") else catalog_skus
         inventory_read = False
         try:
             with qbo.qbo_client(info["qbo_config"]) as qb:
-                data, customers, invoices, last_prices = read_company(state, qb, keep)
+                data, customers, invoices, last_prices = read_company(state, qb, None)
                 db.replace_company(con, state, customers, invoices, last_prices)
                 db.save_snapshot(con, source, payload={
-                    s: {"price": v["price"]} for s, v in data.items()})
+                    s: {"price": v["price"], "name": v["name"]} for s, v in data.items()})
                 results[source] = data
                 log(f"QuickBooks {label}: {len(data)} items, {len(customers)} customers, "
                     f"{len(invoices)} invoices, {len(last_prices)} previous prices read")
@@ -200,14 +206,18 @@ def refresh(log=print):
 def load_pack(overwrite=False, log=print):
     """Fill products.bottles_per_case and bottle_ml (item data held in Catalog.db)
     from each state's QuickBooks company, then each state's inventory system: the
-    first source that knows the value wins. Blank values only, unless overwrite=True."""
+    first source that knows the value wins. Blank values only, unless overwrite=True;
+    a figure typed by a person (pack_source 'admin' or 'owner') is never replaced."""
     results = refresh(log=log)
     sources = sorted(results, key=lambda k: not k.startswith("qbo_"))   # QuickBooks first
     con = db.connect()
     filled = 0
     with con:
-        for row in con.execute("SELECT sku, bottles_per_case, bottle_ml FROM products").fetchall():
+        for row in con.execute("SELECT sku, bottles_per_case, bottle_ml, pack_source "
+                               "FROM products").fetchall():
             if row["bottles_per_case"] and row["bottle_ml"] and not overwrite:
+                continue
+            if row["pack_source"] in ("admin", "owner"):
                 continue
             for source in sources:
                 v = results.get(source, {}).get(row["sku"])

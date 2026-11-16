@@ -4,11 +4,12 @@
 {% macro fig(f) %}<td{% if f.muted %} class="meta"{% endif %}>{{ f.text }}</td>{% endmacro %}
 {% block body %}
 <main class="wrap"><div class="pad">
-  <div><a class="link" href="{{ url_for('catalog') }}">‹ Back to results</a></div>
+  <div class="count"><a class="link" href="{{ url_for('catalog') }}">‹ Back to results</a>
+    {% if g.user['is_admin'] and (not p['uncataloged'] or can_add) %}<a class="btn sm" href="{{ url_for('admin_item', sku=p['sku']) }}">{{ 'Add to catalog' if p['uncataloged'] else 'Edit' }}</a>{% endif %}</div>
   <div class="detail">
     <div>
       <div class="ph">
-        <img src="{{ url_for('photo', kind='detail', name=p['sku'] ~ '.webp') }}" alt="{{ p['name'] }}" width="900" height="1200" onerror="this.parentNode.classList.add('noimg')">
+        <img src="{{ url_for('photo', kind='detail', name=p['sku'] ~ '.webp', v=p['photo_v']) }}" alt="{{ p['name'] }}" width="900" height="1200" onerror="this.parentNode.classList.add('noimg')">
         <div class="fb"><span>Photo</span></div>
       </div>
     </div>

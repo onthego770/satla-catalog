@@ -201,3 +201,18 @@ td:not(:first-child){font-variant-numeric:tabular-nums}
 .pick{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:2px 16px}
 .pick legend{padding:0;font-size:13.5px;margin-bottom:2px}
 .pick .opt span,.uacts .opt span{flex:none}
+
+/* Admin: the pages for catalog items (edit, add, history) */
+.subnav{display:flex;gap:6px;flex-wrap:wrap}
+.subnav a{border:1.5px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;text-decoration:none;color:var(--mute)}
+.subnav a[aria-current="page"]{background:var(--ink);border-color:var(--ink);color:#fff}
+.fgrid{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.fgrid .field .meta{font-weight:400}
+textarea.inp{resize:vertical;line-height:1.45}
+select.inp{appearance:auto}
+#photobox .ph{width:100%;max-width:300px;margin:0 auto}
+@media (min-width:700px){
+  .fgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fgrid .wide{grid-column:1/-1}
+}
+a.btn{text-decoration:none}

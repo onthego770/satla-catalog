@@ -17,8 +17,11 @@ Run with the library's Python, by explicit path:
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py order-email on
 
 init           Create Catalog.db and the site's secret key. Safe to re-run.
-load-products  Load / update the products from Satla_Master_Catalog.csv. Product
-               names are taken as they are (test mode: nothing is renamed).
+load-products  Load the products from Satla_Master_Catalog.csv OVER Catalog.db. Needs
+               --force: Catalog.db is the master since 2026-11-16 (admins edit items
+               on the site) and the file is its copy, so this is only for restoring.
+export-products  Rewrite Satla_Master_Catalog.csv from Catalog.db. The site does this
+               itself after every change an admin makes.
 load-pack      Fill bottles per case and ml from QuickBooks and MMK (read-only).
 refresh        Read regular prices and on hand from QuickBooks and MMK (read-only)
                into the snapshot the pages show. A timer runs this every 30 minutes.
@@ -56,7 +59,12 @@ def cmd_init(_args):
     print(f"database ready: {db.DB_PATH}")
 
 
-def cmd_load_products(_args):
+def cmd_load_products(args):
+    if not args.force:
+        sys.exit("Catalog.db is the master since 2026-11-16: admins edit items on the site "
+                 f"and {CSV_PATH.name} is rewritten from it.\nLoading the file would overwrite "
+                 "those edits with whatever the file holds. If that is what you want, "
+                 "run it again with --force.")
     with open(CSV_PATH, encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
     cols = list(db.CSV_COLUMNS.values())
@@ -72,12 +80,28 @@ def cmd_load_products(_args):
                 continue
             seen.add(values[0])
             con.execute(sql, values)
+        # The pack figures, when the file has them (it does once it has been exported).
+        for r in rows:
+            sku = (r.get("Satla SKU") or "").strip()
+            if sku and all(src in r for src in db.CSV_PACK_COLUMNS):
+                bpc, ml = (float(r[c]) if (r[c] or "").strip() else None
+                           for c in ("Bottles per Case", "Bottle ml"))
+                con.execute("UPDATE products SET bottles_per_case=?, bottle_ml=?, pack_source=? "
+                            "WHERE sku=?", (bpc, ml, (r["Pack Source"] or "").strip() or None, sku))
     extra = sorted(db.skus(con) - seen)
     con.close()
     print(f"{len(seen)} products loaded from {CSV_PATH.name}")
     if extra:
         print(f"note: {len(extra)} products are in Catalog.db but not in the file "
               f"(left as they are): {', '.join(extra)}")
+
+
+def cmd_export_products(_args):
+    import catalog_items
+    con = db.connect()
+    n = catalog_items.export_file(con)
+    con.close()
+    print(f"{n} products written to {CSV_PATH.name} from Catalog.db")
 
 
 def cmd_load_pack(args):
@@ -186,7 +210,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init").set_defaults(func=cmd_init)
-    sub.add_parser("load-products").set_defaults(func=cmd_load_products)
+    lpr = sub.add_parser("load-products")
+    lpr.add_argument("--force", action="store_true",
+                     help="overwrite Catalog.db's products with the file (Catalog.db is the master)")
+    lpr.set_defaults(func=cmd_load_products)
+    sub.add_parser("export-products").set_defaults(func=cmd_export_products)
     lp = sub.add_parser("load-pack")
     lp.add_argument("--overwrite", action="store_true", help="replace values already filled")
     lp.set_defaults(func=cmd_load_pack)

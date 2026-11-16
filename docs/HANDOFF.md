@@ -231,7 +231,7 @@ Need a new photo, wrong product (1): I-DE33.
 
 Need a new photo, too small (14): I-DE27 Delta Lamda (smallest; undersized even in the grid), I-BT123 Bat Shlomo Regavim, I-DR12R-M-23 Drimia Susya, IL-103 Katlav Wadi, KOV-2154 KOVAL Coffee Liqueur, KOV-24526 KOVAL Ginger Liqueur 750 ml, KOV-321434 KOVAL Ginger Liqueur 375 ml, KOV-321437 KOVAL Rose Hip Liqueur, MISCEO, JP-MSI04 Miyamagiku Tokubetsu Junmai, IT-3330 Vincenzi Capasso, MX-VM01, MX-VM02, MX-VM03 Viva Mexico Blanco, Reposado, Añejo.
 
-Label does not match the SKU exactly (5): RSH-TROP100-19-3L- (photo is a standard 100 Tropez rosé; SKU is the 2019 Reserve 3 L); I-AD02R-23 (label 2015, SKU 2023); IT1709281322 (label Chianti Classico 2021, SKU Riserva 2022); GE0101152322 (label 2021, SKU 2022); IT1241451320 (label is Barolo Bricco Ambrogio, the same wine as IT1241571320).
+(UPDATE 2026-11-16: `I-AD02R-23` was deleted from the catalog at the owner's word; see `docs/HANDOFF-2026-11-16.md`.) Label does not match the SKU exactly (5): RSH-TROP100-19-3L- (photo is a standard 100 Tropez rosé; SKU is the 2019 Reserve 3 L); I-AD02R-23 (label 2015, SKU 2023); IT1709281322 (label Chianti Classico 2021, SKU Riserva 2022); GE0101152322 (label 2021, SKU 2022); IT1241451320 (label is Barolo Bricco Ambrogio, the same wine as IT1241571320).
 
 Accepted as they are: several KOVAL and Crater Lake sizes share one photo; I-BT112 and I-AD132 are shown with their wooden boxes; KOV-341973 and KOV-341975 show a 4-pack carton plus can.
 

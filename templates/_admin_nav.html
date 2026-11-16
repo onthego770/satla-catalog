@@ -1,0 +1,5 @@
+<nav class="subnav" aria-label="Admin pages">
+  <a href="{{ url_for('admin_users') }}"{% if admin_page == 'users' %} aria-current="page"{% endif %}>Logins</a>
+  <a href="{{ url_for('admin_items') }}"{% if admin_page == 'items' %} aria-current="page"{% endif %}>Add items</a>
+  <a href="{{ url_for('admin_history') }}"{% if admin_page == 'history' %} aria-current="page"{% endif %}>Item history</a>
+</nav>

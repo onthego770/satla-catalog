@@ -1,6 +1,7 @@
 """catalog.satlaspirits.com: the salesman catalog site (Stage 1: sign in, catalog,
 product page; Stage 2: customers, customer page with order history, invoice;
-Stage 3: New Order and Copy Order, sent as an email; Admin page for logins).
+Stage 3: New Order and Copy Order, sent as an email; Admin pages for logins and
+for editing, adding and deleting catalog items).
 
 Illinois and Florida are kept completely apart (owner, 2026-11-15): each has its
 own products, stock, prices, customers and orders. A login is given the states
@@ -11,7 +12,8 @@ refresh, so nothing in this file names a state.
 Run by gunicorn as the systemd service `catalog-web` (127.0.0.1:5001) behind
 Caddy, the same arrangement as orders.satlaspirits.com.
 
-This worker reads ONLY Catalog.db. It never calls QuickBooks or MMK: prices and
+This worker reads ONLY Catalog.db (and, for an admin, writes item data to it:
+catalog_items.py). It never calls QuickBooks or MMK: prices and
 on hand come from the snapshot that `manage.py refresh` stores on a timer (see
 catalog_live.py), so a page view cannot disturb the QuickBooks token or the MMK
 login. Nothing on the site is visible without signing in.
@@ -30,12 +32,14 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from zoneinfo import ZoneInfo
 
-from flask import (Flask, abort, g, redirect, render_template, request,
+from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request,
                    send_from_directory, session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import catalog_db as db
+import catalog_items as items
+import catalog_source as source
 
 CONFIG_PATH = db.ROOT.parent / "config" / "catalog_config.json"
 PHOTO_DIR = db.ROOT / "photos"
@@ -55,6 +59,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("CATALOG_WEB_INSECURE") != "1",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    MAX_CONTENT_LENGTH=6 * 1024 * 1024,        # the largest post is an item's two photos
 )
 
 # Brute-force throttle for /login: recent failures per visitor address.
@@ -253,6 +258,7 @@ def catalog():
         "grape": r["grape"], "country": r["country"], "region": r["region"],
         "mev": r["mevushal"], "kfp": _kfp(r), "org": r["organic"], "vint": r["vintage"],
         **({"x": 1} if r["uncataloged"] else {}),
+        **({"pv": r["photo_v"]} if r["photo_v"] else {}),
     } for r in db.state_products(g.db, g.state)]
     return render_template("catalog.html", products=products)
 
@@ -324,7 +330,8 @@ def product(sku):
         ("Kosher certifier", p["certifier"]), ("SKU", p["sku"]),
     ]
     return render_template("product.html", p=p, facts=facts, live=_state_figures(sku, g.state),
-                           inventory_name=g.states[g.state]["inventory"])
+                           inventory_name=g.states[g.state]["inventory"],
+                           can_add=bool(p["uncataloged"]) and items.inventory_item(g.db, sku) is not None)
 
 
 # --- customers and order history (Stage 2) ------------------------------------
@@ -446,7 +453,7 @@ def _order_products(company, cid):
         sku = r["sku"]
         hand, prev = have[sku], last.get(sku)
         out.append({"sku": sku, "name": r["name"], "size": r["size"], "brand": r["brand"],
-                    "cat": r["category"], "grape": r["grape"], "country": r["country"],
+                    "pv": r["photo_v"], "cat": r["category"], "grape": r["grape"], "country": r["country"],
                     "region": r["region"], "reg": (prices.get(sku) or {}).get("price"),
                     "hand": _cases(hand) if hand is not None else None,
                     "prev": {"p": prev["price"], "d": _day(prev["date"])} if prev else None})
@@ -643,6 +650,145 @@ def admin_users():
              for u in db.users(g.db)]
     return render_template("admin.html", users=users, note=note, error=error,
                            min_password=MIN_PASSWORD), (400 if error else 200)
+
+
+# --- Admin: catalog items (owner, 2026-11-16) -----------------------------------
+# "Can we discuss how we can create a "modify item" functionality for admins?"
+# His answers: change the product name, "YES"; add an item, "YES, please
+# include"; delete an item, "YES, FOR SURE"; who edits, "ONLY DOVID & YOEL".
+# All of the work is in catalog_items.py; every change is recorded and can be
+# undone from the History page. Nothing here touches QuickBooks or MMK.
+
+def _note(text=None):
+    """A one-time message for the next admin page: set it, or take it."""
+    if text is None:
+        return session.pop("note", None)
+    session["note"] = text
+
+
+def _posted_photos():
+    """The photo pair the edit page made, as {kind: bytes}; {} when the admin
+    ticked "remove the photo"; items.KEEP when the photo was left alone."""
+    if request.form.get("photo_remove") == "1":
+        return {}
+    photos = {kind: f.read(items.MAX_PHOTO_BYTES + 1)
+              for kind in items.PHOTO_SIZES
+              if (f := request.files.get("photo_" + kind)) and f.filename}
+    return photos or items.KEEP
+
+
+@app.route("/admin/item/<path:sku>", methods=["GET", "POST"])
+@admin_required
+def admin_item(sku):
+    """Edit a catalog item, or add one: the same form. A SKU with no catalog
+    entry can be added only when a state's inventory system holds it."""
+    row = db.product(g.db, sku)
+    adding = row is None
+    p = items.blank_item(g.db, sku) if adding else dict(row)
+    if p is None:
+        abort(404)
+    problems = []
+    if request.method == "POST":
+        if request.form.get("action") == "delete":
+            if adding:
+                abort(400)
+            if request.form.get("sure") != "1":
+                problems.append("Tick the box to confirm, then press Delete.")
+            else:
+                items.save(g.db, sku, None, g.user, "delete")
+                _note(f"{p['name']} ({sku}) was deleted from the catalog. "
+                      "Undo is on this page if that was a mistake.")
+                return redirect(url_for("admin_history"))
+        else:
+            values, problems = items.clean(request.form)
+            photos = _posted_photos()
+            if photos is not items.KEEP and photos:
+                problem = items.check_photos(photos)
+                if problem:
+                    problems.append(problem)
+            if problems:
+                p = dict(p, **values)              # show what was typed
+            else:
+                items.save(g.db, sku, items.merged(p, values), g.user,
+                           "add" if adding else "edit", photos=photos)
+                if g.state and db.state_product(g.db, g.state, sku):
+                    return redirect(url_for("product", sku=sku))
+                _note(f"{values['name']} ({sku}) was saved. It is not in the "
+                      f"{_state_name(g.state) if g.state else 'current'} catalog, "
+                      "so its page is not shown here.")
+                return redirect(url_for("admin_history"))
+    has_photo = not adding and (PHOTO_DIR / "detail" / f"{sku}.webp").exists()
+    return render_template("item.html", p=p, adding=adding, problems=problems,
+                           fields=items.FIELDS, suggest=items.suggestions(g.db),
+                           names=items.system_names(g.db, sku), has_photo=has_photo,
+                           sizes=items.PHOTO_SIZES), (400 if problems else 200)
+
+
+def _store_password():
+    """The Kosher Wine World storefront password, from the site's private config."""
+    try:
+        return json.loads(CONFIG_PATH.read_text()).get("kww_password") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+@app.route("/admin/source", methods=["POST"])
+@admin_required
+def admin_source():
+    """The edit form's "Fill from Kosher Wine World" box: what that store holds
+    for the product page whose address the admin pasted, as JSON. Nothing is
+    saved: the page puts it into the form and the admin presses Save."""
+    try:
+        found = source.product(request.form.get("url"), _store_password())
+    except source.SourceError as e:
+        return jsonify(error=str(e)), 400
+    if found["image"]:
+        found["image"] = url_for("admin_source_image", u=found["image"])
+    # The store has no brand field: work it out from the names (theirs, and the
+    # one the form holds now).
+    found["brand"] = items.brand_for(g.db, [found["name"], request.form.get("name")],
+                                     found.pop("tags"))
+    return jsonify(found)
+
+
+@app.route("/admin/source/image")
+@admin_required
+def admin_source_image():
+    """A Kosher Wine World product picture, passed through to the edit page's
+    photo tool (a browser cannot read another site's picture into a canvas)."""
+    try:
+        data, kind = source.image(request.args.get("u"), _store_password())
+    except source.SourceError as e:
+        return jsonify(error=str(e)), 400
+    return Response(data, mimetype=kind, headers={"Cache-Control": "private, max-age=300"})
+
+
+@app.route("/admin/items")
+@admin_required
+def admin_items():
+    """What can be added: the items of the current state's inventory that have
+    no catalog entry."""
+    if g.state is None:
+        abort(404)
+    rows = sorted(db.uncataloged(g.db, g.state), key=lambda r: (r["name"] or "").casefold())
+    return render_template("items.html", rows=rows, state_name=_state_name(g.state),
+                           inventory_name=g.states[g.state]["inventory"], note=_note())
+
+
+@app.route("/admin/history", methods=["GET", "POST"])
+@admin_required
+def admin_history():
+    error = None
+    if request.method == "POST":
+        try:
+            items.undo(g.db, request.form.get("id"), g.user)
+            _note("The change was undone.")
+            return redirect(url_for("admin_history"))
+        except ValueError as e:
+            error = str(e)
+    rows = [dict(c, when=_when(c["at"])) for c in items.changes(g.db)]
+    return render_template("history.html", rows=rows, note=_note(), error=error), \
+        (400 if error else 200)
 
 
 # --- photos (behind the login, like everything else) ---------------------------

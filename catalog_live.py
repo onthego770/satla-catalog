@@ -37,6 +37,9 @@ import catalog_db as db
 LIBRARY = Path.home() / "python" / "qbo_scripts"
 HISTORY_DAYS = 365          # order history: QuickBooks invoices, last 12 months
 ALL_INVOICES_FROM = "2000-01-01"   # previous prices use every invoice, however old
+# The customer custom field in QuickBooks that names the customer's salesman.
+# A company that has no such field gives every customer a blank salesman.
+SALESMAN_FIELD = "SALESMAN"
 
 
 def _library():
@@ -79,7 +82,8 @@ def read_company(state, qb, skus):
     {sku: {price, bpc, ml}}; `price` is the regular price per case (None when
     QuickBooks has none set). `customers` and `invoices`
     are rows ready for Catalog.db: a customer's address is the billing address,
-    or the shipping address when there is no billing one; an invoice carries its
+    or the shipping address when there is no billing one, and `salesman` is the
+    customer's SALESMAN custom field ('' when blank); an invoice carries its
     product lines as [{sku, name, qty, price, amount}], exactly as QuickBooks
     holds them. `invoices` covers the last 12 months only.
 
@@ -96,6 +100,7 @@ def read_company(state, qb, skus):
     items = {r.sku: {"price": _num(r.unit_price), "bpc": _num(r.bpc), "ml": _num(r.vol_ml)}
              for r in _wanted(prices, skus).itertuples()}
     raw_customers = qbo.fetch_customers(qb)
+    custom = qbo.fetch_customer_custom_fields(qb)
     raw_invoices = qbo.fetch_invoices_since(qb, ALL_INVOICES_FROM)
     sku_map = qbo.fetch_item_skus(qb, raw_invoices)
     customers = []
@@ -103,6 +108,7 @@ def read_company(state, qb, skus):
         addr = c["billing"] if (c["billing"]["street"] or c["billing"]["city"]) else c["shipping"]
         customers.append({"id": c["id"], "name": c["name"], "contact": c["contact"],
                           "phone": c["phone"], "email": c["email"], "balance": c["balance"],
+                          "salesman": custom.get(c["id"], {}).get(SALESMAN_FIELD, ""),
                           **addr})
     invoices, last_prices = [], {}
     cutoff = since.strftime("%Y-%m-%d")

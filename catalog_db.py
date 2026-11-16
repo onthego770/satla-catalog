@@ -23,7 +23,7 @@ Tables:
                  pages show its "as of" time. Nothing here is ever written back to
                  QuickBooks or MMK.
   qbo_customers  The LAST READ of each QuickBooks company's customers (name,
-  qbo_invoices   address, contact, balance) and of its invoices for the last 12
+  qbo_invoices   address, contact, balance, salesman) and of its invoices for the last 12
                  months with their line items. Also a cache of a read: the same
                  timer replaces both tables, per company, each time it runs.
   qbo_last_prices  What each customer last paid per case for each product: the
@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS qbo_customers (
     phone   TEXT,
     email   TEXT,
     balance REAL,
+    salesman TEXT,                  -- the customer's SALESMAN custom field in QuickBooks ('' = not set)
     PRIMARY KEY (company, id)
 );
 CREATE TABLE IF NOT EXISTS qbo_invoices (
@@ -181,6 +182,9 @@ def init():
             # Logins made before states existed saw everything: they keep both.
             con.execute("ALTER TABLE users ADD COLUMN states TEXT NOT NULL DEFAULT ''")
             con.execute("UPDATE users SET states = 'IL,FL'")
+        if "salesman" not in {r["name"] for r in con.execute("PRAGMA table_info(qbo_customers)")}:
+            # Filled by the next refresh; until then only admins see customers.
+            con.execute("ALTER TABLE qbo_customers ADD COLUMN salesman TEXT")
         # The Illinois on-hand read used to be stored as 'mmk_il'; it is 'inv_il' now.
         con.execute("DELETE FROM live_snapshot WHERE source = 'mmk_il'")
     con.close()
@@ -371,9 +375,10 @@ def replace_company(con, company, customers, invoices, last_prices):
             [(company, cid, sku, price, day) for (cid, sku), (price, day) in last_prices.items()])
         con.executemany(
             "INSERT INTO qbo_customers (company, id, name, street, city, state, zip, "
-            "contact, phone, email, balance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "contact, phone, email, balance, salesman) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             [(company, c["id"], c["name"], c["street"], c["city"], c["state"], c["zip"],
-              c["contact"], c["phone"], c["email"], c["balance"]) for c in customers])
+              c["contact"], c["phone"], c["email"], c["balance"], c.get("salesman") or "")
+             for c in customers])
         con.executemany(
             "INSERT INTO qbo_invoices (company, id, doc_number, customer_id, txn_date, "
             "total, balance, lines) VALUES (?,?,?,?,?,?,?,?)",
@@ -381,16 +386,45 @@ def replace_company(con, company, customers, invoices, last_prices):
               v["total"], v["balance"], json.dumps(v["lines"])) for v in invoices])
 
 
-def customers(con, company):
-    """Every customer of one state's QuickBooks company, by name."""
-    rows = con.execute("SELECT company, id, name, city, state FROM qbo_customers "
+def salesman_key(name):
+    """A salesman's name as it is compared: case and spacing do not count, so the
+    login "Henry Kogel" matches QuickBooks' "HENRY KOGEL". '' for no name."""
+    return " ".join((name or "").split()).casefold()
+
+
+def customers(con, company, salesman=None):
+    """The customers of one state's QuickBooks company, by name. `salesman` None
+    (an admin) = every customer; a name = only the customers whose SALESMAN field
+    in QuickBooks is that name (the owner, 2026-11-15: "Each salesman should see
+    only their own customers"). A customer with no SALESMAN belongs to nobody."""
+    rows = con.execute("SELECT company, id, name, city, state, salesman FROM qbo_customers "
                        "WHERE company = ?", (company,)).fetchall()
+    if salesman is not None:
+        key = salesman_key(salesman)
+        rows = [r for r in rows if key and salesman_key(r["salesman"]) == key]
     return sorted(rows, key=lambda r: (r["name"] or "").casefold())
 
 
-def customer(con, company, cid):
-    return con.execute("SELECT * FROM qbo_customers WHERE company = ? AND id = ?",
-                       (company, cid)).fetchone()
+def customer(con, company, cid, salesman=None):
+    """One customer, or None when there is no such customer OR it is not
+    `salesman`'s (same rule as `customers()`; None = an admin, sees everyone)."""
+    row = con.execute("SELECT * FROM qbo_customers WHERE company = ? AND id = ?",
+                      (company, cid)).fetchone()
+    if row is not None and salesman is not None:
+        key = salesman_key(salesman)
+        if not key or salesman_key(row["salesman"]) != key:
+            return None
+    return row
+
+
+def salesman_counts(con):
+    """{(company, salesman_key): number of customers}, for the Admin page: how
+    many customers each login sees. Customers with no SALESMAN are under ''."""
+    out = {}
+    for r in con.execute("SELECT company, salesman FROM qbo_customers"):
+        k = (r["company"], salesman_key(r["salesman"]))
+        out[k] = out.get(k, 0) + 1
+    return out
 
 
 def customer_invoices(con, company, cid):

@@ -1,9 +1,10 @@
 /* Catalog screen: search, browse menu, filters, product grid.
    The behaviour is the approved wireframe's (wireframes/index.html), moved here
    with real data: every search word must match, accents are ignored; within one
-   filter any ticked value matches, across filters all must match; a region only
-   narrows its own country; a blank field means unknown, not "no"; products are
-   listed by brand then name. No prices on this screen. */
+   filter any ticked value matches, across filters all must match; the country
+   filter has no region level under it (the owner, 2026-11-15: "Country is
+   enough"); a blank field means unknown, not "no"; products are listed by
+   brand then name. No prices on this screen. */
 "use strict";
 (function () {
   const P = JSON.parse(document.getElementById("pdata").textContent);
@@ -24,7 +25,7 @@
   const SUB = {wine: ["Red", "White", "Rosé", "Sparkling", "Orange", "Dessert & Fortified"], spirits: ["Tequila", "Whiskey", "Gin", "Vodka", "Brandy & Cognac"]};
   const ml = s => { const m = /([\d.]+)\s*(ml|l)/i.exec(s || ""); return m ? parseFloat(m[1]) * (m[2].toLowerCase() === "l" ? 1000 : 1) : 0; };
   const FG = [
-    {k: "country", label: "Country & region", get: p => [p.country]},
+    {k: "country", label: "Country", get: p => [p.country]},
     {k: "brand", label: "Brand / producer", get: p => [p.brand]},
     {k: "grape", label: "Grape / base", get: p => p.grapes},
     {k: "sweet", label: "Sweetness", get: p => [p.sweet], ord: ["Dry", "Semi-Dry", "Semi-Sweet", "Sweet"]},
@@ -34,8 +35,7 @@
     {k: "size", label: "Bottle size", get: p => [p.size], cmp: (a, b) => ml(a) - ml(b)},
     {k: "vint", label: "Vintage", get: p => [p.vint], cmp: (a, b) => (a === "NV") - (b === "NV") || b.localeCompare(a)}
   ];
-  const REGION = {k: "region", get: p => [p.region]};
-  const blankF = () => ({country: [], region: [], brand: [], grape: [], sweet: [], mev: [], kfp: [], org: [], size: [], vint: []});
+  const blankF = () => ({country: [], brand: [], grape: [], sweet: [], mev: [], kfp: [], org: [], size: [], vint: []});
 
   /* ---------- state: kept for the browser tab, so "Back to results" returns
      to the same search, menu, filters and scroll position ---------- */
@@ -46,7 +46,9 @@
   if (saved) {
     S.q = saved.q || ""; S.sub = saved.sub || null; S.scroll = saved.scroll || 0;
     if (MENU.some(m => m[0] === saved.menu)) S.menu = saved.menu;
-    Object.assign(S.f, saved.f || {}); Object.assign(S.openF, saved.openF || {});
+    /* only the filters that exist today: a tab saved earlier may hold others */
+    for (const k in S.f) if (saved.f && Array.isArray(saved.f[k])) S.f[k] = saved.f[k];
+    Object.assign(S.openF, saved.openF || {});
   }
   function save() { store(KEY, {q: S.q, menu: S.menu, sub: S.sub, f: S.f, openF: S.openF, scroll: window.scrollY}); }
 
@@ -67,14 +69,9 @@
   }
   const qMatch = (p, q) => wordsMatch(p.hay, q);
   function fMatch(p, skip) {
-    for (const g of FG.concat([REGION])) {
+    for (const g of FG) {
       if (g.k === skip) continue;
       const sel = S.f[g.k]; if (!sel.length) continue;
-      if (g.k === "region") { /* a region only narrows its own country */
-        const mine = sel.filter(r => P.some(x => x.region === r && x.country === p.country));
-        if (mine.length && !mine.includes(p.region)) return false;
-        continue;
-      }
       if (!g.get(p).some(v => sel.includes(v))) return false;
     }
     return true;
@@ -82,7 +79,7 @@
   function options(g, base) {
     const m = new Map();
     base.filter(p => fMatch(p, g.k)).forEach(p => g.get(p).forEach(v => { if (v) m.set(v, (m.get(v) || 0) + 1); }));
-    if (g.k !== "region") S.f[g.k].forEach(v => { if (!m.has(v)) m.set(v, 0); });
+    S.f[g.k].forEach(v => { if (!m.has(v)) m.set(v, 0); });
     const a = [...m.entries()];
     if (g.ord) a.sort((x, y) => g.ord.indexOf(x[0]) - g.ord.indexOf(y[0]));
     else if (g.cmp) a.sort((x, y) => g.cmp(x[0], y[0]));
@@ -105,10 +102,6 @@
       for (const [v, n] of o) {
         const on = S.f[g.k].includes(v);
         h += '<label class="opt"><input type="checkbox" id="f-' + g.k + "-" + sid(v) + '" data-f="' + g.k + '" data-v="' + esc(v) + '"' + (on ? " checked" : "") + "><span>" + esc(v) + "</span><small>" + n + "</small></label>";
-        if (g.k === "country" && on) {
-          for (const [r, rn] of options(REGION, base.filter(p => p.country === v)))
-            h += '<label class="opt sub"><input type="checkbox" id="f-region-' + sid(r) + '" data-f="region" data-v="' + esc(r) + '"' + (S.f.region.includes(r) ? " checked" : "") + "><span>" + esc(r) + "</span><small>" + rn + "</small></label>";
-        }
       }
       h += "</div></details>";
     }
@@ -194,7 +187,6 @@
   document.addEventListener("change", e => {
     const t = e.target; if (!(t.dataset && t.dataset.f)) return;
     toggle(S.f[t.dataset.f], t.dataset.v);
-    if (t.dataset.f === "country" && !t.checked) S.f.region = S.f.region.filter(r => P.some(p => p.region === r && S.f.country.includes(p.country)));
     render();
   });
   document.addEventListener("toggle", e => { const k = e.target.dataset && e.target.dataset.fg; if (k) { S.openF[k] = e.target.open; save(); } }, true);

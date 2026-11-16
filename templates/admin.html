@@ -32,6 +32,7 @@
             {% if not u['active'] %}<span class="st open">OFF</span>{% endif %}
             {% if not u['states'] %}<span class="st open">NO STATE</span>{% endif %}
             <br><span class="meta">{{ u['email'] }} · since {{ u['created_at'][:10] }}</span>
+            <br><span class="meta">Customers: {% if u['is_admin'] %}all{% else %}{% for code, n in u['sees'].items() %}{{ n }} in {{ code }}{{ ', ' if not loop.last }}{% else %}none{% endfor %}{% endif %}</span>
           </div>
           <div class="uacts">
             <form method="post" class="srow">
@@ -59,6 +60,7 @@
         {% endfor %}
       </div>
       <p class="meta">A login sees only the states ticked for it: that state's catalog, customers and orders.</p>
+      <p class="meta">An admin sees every customer. Anyone else sees only the customers whose SALESMAN field in QuickBooks is their name as typed here (capitals do not matter). A customer with no SALESMAN is seen by admins only.</p>
       <p class="meta">A login that is switched off cannot sign in; switching it on again keeps its password.</p>
     </div>
   </div>

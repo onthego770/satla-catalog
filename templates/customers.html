@@ -3,7 +3,7 @@
 {% block title %}{{ g.states[g.state]['name'] }} customers · Satla Spirits{% endblock %}
 {% block body %}
 <main class="wrap"><div class="pad">
-  <div id="view" class="col"><p class="meta">Loading customers…</p></div>
+  <div id="view" class="col"{% if mine %} data-mine="1"{% endif %}><p class="meta">Loading customers…</p></div>
   {% include "_qbo_asof.html" %}
 </div></main>
 <script id="cdata" type="application/json">{{ customers|tojson }}</script>

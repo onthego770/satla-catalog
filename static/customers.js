@@ -1,5 +1,5 @@
 /* Customers screen: search by business name or city. The page holds one state's
-   customers: the state the header switch is on. */
+   customers: the state the header switch is on (for a salesman, only their own). */
 "use strict";
 (function () {
   const {esc, norm, wordsMatch, load, save} = window.Satla;
@@ -14,6 +14,8 @@
     const list = C.filter(c => wordsMatch(c.hay, S.q));
     let h = '<div class="srow"><input class="inp" id="cq" type="search" placeholder="Search customers by name or city" value="' + esc(S.q) + '" aria-label="Search customers" enterkeyhint="search"></div>' +
       '<div class="meta">' + list.length + " of " + C.length + " customers</div>";
+    /* a salesman sees only the customers with their name in QuickBooks' SALESMAN field */
+    if (!C.length && view.dataset.mine) return h + '<div class="empty"><b>No customers in this state are under your name.</b><br>A customer shows here when its SALESMAN field in QuickBooks is your name. Ask the office if one is missing.</div>';
     if (!C.length) return h + '<div class="empty"><b>No customers have been read yet.</b><br>They are read from QuickBooks every 30 minutes.</div>';
     if (!list.length) return h + '<div class="empty"><b>No customers match.</b><br>Check the spelling.</div>';
     return h + '<div class="list">' + list.map(c => '<a class="rowbtn" href="/customer/' + c.co + "/" + encodeURIComponent(c.id) + '"><b>' + esc(c.name) + '</b><span class="meta">' + esc([c.city, c.st].filter(Boolean).join(", ") || "No address in QuickBooks") + '</span></a>').join("") + "</div>";

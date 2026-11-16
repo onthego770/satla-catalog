@@ -355,12 +355,29 @@ def _qbo_sources(companies):
     return out
 
 
+def _whose():
+    """Whose customers the signed-in person sees: None = everyone's (an admin),
+    otherwise their own name, matched to the customer's SALESMAN field in
+    QuickBooks. The owner, 2026-11-15: "Each salesman should see only their own
+    customers, However Yoel and Dovid are Admins, so we can see everything." """
+    return None if g.user["is_admin"] else g.user["name"]
+
+
+def _customer(company, cid):
+    """The customer, or a 404 when it does not exist or is not this person's.
+    Every page about one customer (its page, invoices, orders) goes through here."""
+    c = db.customer(g.db, company, cid, _whose())
+    if c is None:
+        abort(404)
+    return c
+
+
 @app.route("/customers")
 @login_required
 def customers():
     rows = [{"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
-             "st": r["state"]} for r in db.customers(g.db, g.state)]
-    return render_template("customers.html", customers=rows,
+             "st": r["state"]} for r in db.customers(g.db, g.state, _whose())]
+    return render_template("customers.html", customers=rows, mine=_whose() is not None,
                            sources=_qbo_sources((g.state,)))
 
 
@@ -368,9 +385,7 @@ def customers():
 @login_required
 def customer(company, cid):
     _use_state(company)
-    c = db.customer(g.db, company, cid)
-    if c is None:
-        abort(404)
+    c = _customer(company, cid)
     invoices = [{"id": v["id"], "doc_number": v["doc_number"], "date": _day(v["txn_date"]),
                  "items": len(json.loads(v["lines"])), "total": v["total"],
                  "open": (v["balance"] or 0) > 0.004}
@@ -389,7 +404,7 @@ def invoice(company, iid):
     v = db.invoice(g.db, company, iid)
     if v is None:
         abort(404)
-    c = db.customer(g.db, company, v["customer_id"])
+    c = _customer(company, v["customer_id"])
     lines, product_sum = [], 0.0
     products = {p["sku"]: p for p in db.state_products(g.db, company)}
     for ln in json.loads(v["lines"]):
@@ -407,7 +422,7 @@ def invoice(company, iid):
     return render_template("invoice.html", v=v, lines=lines, date=_day(v["txn_date"]),
                            is_open=(v["balance"] or 0) > 0.004,
                            adjustment=adjustment if abs(adjustment) >= 0.01 else None,
-                           customer_name=c["name"] if c else "Customer",
+                           customer_name=c["name"],
                            company_name=_state_name(company),
                            sources=_qbo_sources((company,)))
 
@@ -451,9 +466,7 @@ def _order_sources(company):
 @login_required
 def order(company, cid):
     _use_state(company)
-    c = db.customer(g.db, company, cid)
-    if c is None:
-        abort(404)
+    c = _customer(company, cid)
     copy = None
     iid = request.args.get("copy")
     if iid:
@@ -548,9 +561,7 @@ def _send_order_email(subject, body):
 @login_required
 def order_send(company, cid):
     _use_state(company)
-    c = db.customer(g.db, company, cid)
-    if c is None:
-        abort(404)
+    c = _customer(company, cid)
     back = url_for("order", company=company, cid=cid)
     ctx = {"c": c, "back": back, "to": ORDER_TO, "cc": g.user["email"],
            "customer_url": url_for("customer", company=company, cid=cid),
@@ -625,7 +636,11 @@ def admin_users():
                     note = f"{what} switched {'on' if turn_on else 'off'} for {user['name']}."
             else:
                 abort(400)
-    users = [{**dict(u), "states": db.user_states(u)} for u in db.users(g.db)]
+    counts = db.salesman_counts(g.db)
+    users = [{**dict(u), "states": db.user_states(u),
+              "sees": {code: counts.get((code, db.salesman_key(u["name"])), 0)
+                       for code in db.user_states(u)}}
+             for u in db.users(g.db)]
     return render_template("admin.html", users=users, note=note, error=error,
                            min_password=MIN_PASSWORD), (400 if error else 200)
 

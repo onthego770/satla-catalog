@@ -21,6 +21,7 @@
           <dt>Contact</dt><dd>{{ val(c['contact']) }}</dd>
           <dt>Phone</dt><dd>{% if c['phone'] %}<a href="tel:{{ c['phone'] }}">{{ c['phone'] }}</a>{% else %}<span class="meta">—</span>{% endif %}</dd>
           <dt>Email</dt><dd>{% if c['email'] %}<a href="mailto:{{ c['email'] }}">{{ c['email'] }}</a>{% else %}<span class="meta">—</span>{% endif %}</dd>
+          <dt>Salesman</dt><dd>{{ val(c['salesman']) }}</dd>
         </dl>
       </div>
     </div>

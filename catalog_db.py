@@ -9,11 +9,16 @@ Tables:
                  fields, bottles per case, ml. First loaded from
                  Satla_Master_Catalog.csv (`manage.py load-products`); bottles per
                  case and ml are filled from QuickBooks / MMK (`manage.py load-pack`).
-  users          Logins (email, name, hashed password, is_admin). There is no
-                 sign-up. An admin (owner, 2026-11-15) manages logins on the
+  users          Logins (email, name, hashed password, is_admin, states). `states`
+                 is the comma-separated list of state codes the login may use
+                 ("IL,FL"; owner, 2026-11-15). There is no sign-up. An admin (owner, 2026-11-15) manages logins on the
                  site's Admin page; `manage.py add-user` still works too.
-  live_snapshot  The LAST READ of regular prices and quantity on hand from
-                 QuickBooks (Illinois, Florida) and MMK. This is a cache of a read,
+  live_snapshot  The LAST READ, per state: `qbo_<st>` = regular prices from that
+                 state's QuickBooks company; `inv_<st>` = cases on hand for the
+                 catalog products that state HAS (Illinois: MMK; Florida:
+                 QuickBooks Florida), which is also the list of what the state
+                 sells; `states` = the states themselves, copied from the
+                 library's STATES table. This is a cache of a read,
                  not item data: `manage.py refresh` rewrites it on a timer and the
                  pages show its "as of" time. Nothing here is ever written back to
                  QuickBooks or MMK.
@@ -34,6 +39,7 @@ that talks to QuickBooks or MMK lives in catalog_live.py and goes through the
 existing library in ~/python/qbo_scripts.
 """
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,10 +81,11 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     active        INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
-    is_admin      INTEGER NOT NULL DEFAULT 0
+    is_admin      INTEGER NOT NULL DEFAULT 0,
+    states        TEXT NOT NULL DEFAULT ''   -- "IL,FL": the states this login may use
 );
 CREATE TABLE IF NOT EXISTS qbo_customers (
-    company TEXT NOT NULL,          -- 'IL' or 'FL': which QuickBooks company
+    company TEXT NOT NULL,          -- state code ('IL', 'FL'): which QuickBooks company
     id      TEXT NOT NULL,          -- QuickBooks Customer Id (per company)
     name    TEXT,
     street  TEXT,
@@ -170,17 +177,17 @@ def init():
         # not add a column to a table that already exists).
         if "is_admin" not in {r["name"] for r in con.execute("PRAGMA table_info(users)")}:
             con.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        if "states" not in {r["name"] for r in con.execute("PRAGMA table_info(users)")}:
+            # Logins made before states existed saw everything: they keep both.
+            con.execute("ALTER TABLE users ADD COLUMN states TEXT NOT NULL DEFAULT ''")
+            con.execute("UPDATE users SET states = 'IL,FL'")
+        # The Illinois on-hand read used to be stored as 'mmk_il'; it is 'inv_il' now.
+        con.execute("DELETE FROM live_snapshot WHERE source = 'mmk_il'")
     con.close()
     DB_PATH.chmod(0o600)                          # holds password hashes
 
 
 # --- products ---------------------------------------------------------------
-
-def all_products(con):
-    """Every product, sorted by brand then name (the catalog has no sort control)."""
-    rows = con.execute("SELECT * FROM products").fetchall()
-    return sorted(rows, key=lambda r: ((r["brand"] or "") + (r["name"] or "")).casefold())
-
 
 def product(con, sku):
     return con.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
@@ -206,18 +213,24 @@ def users(con):
     return con.execute("SELECT * FROM users ORDER BY name COLLATE NOCASE").fetchall()
 
 
-def add_user(con, name, email, password_hash, is_admin=False):
+def add_user(con, name, email, password_hash, is_admin=False, states=()):
     """Create a login. The caller hashes the password (werkzeug) and has already
-    checked that the email is free."""
+    checked that the email is free. `states`: the state codes it may use."""
     with con:
-        con.execute("INSERT INTO users (email, name, password_hash, created_at, is_admin) "
-                    "VALUES (?,?,?,?,?)", (email.strip().lower(), name.strip(),
-                                           password_hash, now_utc(), int(bool(is_admin))))
+        con.execute("INSERT INTO users (email, name, password_hash, created_at, is_admin, states) "
+                    "VALUES (?,?,?,?,?,?)", (email.strip().lower(), name.strip(), password_hash,
+                                             now_utc(), int(bool(is_admin)), ",".join(states)))
+
+
+def user_states(user):
+    """The state codes a login may use, as a list."""
+    return [c for c in (user["states"] or "").split(",") if c]
 
 
 def update_user(con, uid, **fields):
-    """Change a login: any of password_hash, active, is_admin, name."""
-    allowed = {"password_hash", "active", "is_admin", "name"}
+    """Change a login: any of password_hash, active, is_admin, name, states
+    (states as the stored text, "IL,FL")."""
+    allowed = {"password_hash", "active", "is_admin", "name", "states"}
     if not fields or set(fields) - allowed:
         raise ValueError(f"update_user takes only {sorted(allowed)}")
     with con:
@@ -236,6 +249,83 @@ def admin_count(con):
 
 
 # --- live snapshot ----------------------------------------------------------
+
+STATES_SOURCE = "states"
+
+
+def qbo_source(state):
+    """Snapshot key of a state's regular prices (its QuickBooks company)."""
+    return "qbo_" + state.lower()
+
+
+def inv_source(state):
+    """Snapshot key of a state's inventory: which products it has, and cases on hand."""
+    return "inv_" + state.lower()
+
+
+def extra_source(state):
+    """Snapshot key of a state's items that have NO catalog entry:
+    {sku: {name, ml, bpc}}. Empty unless the state lists its whole inventory
+    (`catalog_all` in the library's STATES)."""
+    return "extra_" + state.lower()
+
+
+MEVUSHAL_IN_NAME = re.compile(r"\(M\)|mevush?al", re.IGNORECASE)
+
+
+def mevushal(name, value):
+    """A product's Mevushal value. The owner's rule (2026-11-15): "any time the
+    title says "M" or "Mevusal" the catalog reflects that", so a name holding
+    "(M)" or "Mevushal" is Yes whatever the product data says; otherwise the
+    product data stands."""
+    return "Yes" if MEVUSHAL_IN_NAME.search(name or "") else value
+
+
+def _size(ml):
+    """Bottle size as the catalog writes it: 750 ml, 1.5 L."""
+    if not ml:
+        return None
+    return f"{ml / 1000:g} L" if ml >= 1000 else f"{ml:g} ml"
+
+
+def state_products(con, state):
+    """Every product of one state, as dicts with the products table's columns
+    plus `uncataloged`, sorted by brand then name.
+
+    A state's products are the catalog products that have a record in its
+    inventory (snapshot inv_<st>), then, for a state that lists its whole
+    inventory, the items with no catalog entry (snapshot extra_<st>): those
+    carry only what the inventory system knows (SKU, name, bottle size, bottles
+    per case), every other column is None, and `uncataloged` is True.
+    `mevushal` follows the name: see mevushal()."""
+    have = snapshot(con, inv_source(state))["data"] or {}
+    extra = snapshot(con, extra_source(state))["data"] or {}
+    rows = con.execute("SELECT * FROM products").fetchall()
+    columns = [d[0] for d in con.execute("SELECT * FROM products LIMIT 0").description]
+    out = [dict(r, uncataloged=False) for r in rows if r["sku"] in have]
+    catalog = {r["sku"] for r in rows}
+    for sku, v in extra.items():
+        if sku in have and sku not in catalog:
+            out.append(dict(dict.fromkeys(columns), sku=sku, name=v["name"] or sku,
+                            size=_size(v["ml"]), bottles_per_case=v["bpc"],
+                            bottle_ml=v["ml"], uncataloged=True))
+    for p in out:
+        p["mevushal"] = mevushal(p["name"], p["mevushal"])
+    return sorted(out, key=lambda r: ((r["brand"] or "") + (r["name"] or "")).casefold())
+
+
+def state_product(con, state, sku):
+    """One product of a state as state_products() gives it, or None when the
+    state does not have it."""
+    return next((p for p in state_products(con, state) if p["sku"] == sku), None)
+
+
+def states(con):
+    """{code: {'name', 'inventory'}} for every state the last refresh knew, in
+    the library's order. `inventory` names the system that holds that state's
+    inventory ("MMK", "QuickBooks Florida")."""
+    return snapshot(con, STATES_SOURCE)["data"] or {}
+
 
 def save_snapshot(con, source, payload=None, error=None):
     """Record one read attempt. A failed read keeps the last good figures and
@@ -291,9 +381,10 @@ def replace_company(con, company, customers, invoices, last_prices):
               v["total"], v["balance"], json.dumps(v["lines"])) for v in invoices])
 
 
-def customers(con):
-    """Every customer of both companies, by name."""
-    rows = con.execute("SELECT company, id, name, city, state FROM qbo_customers").fetchall()
+def customers(con, company):
+    """Every customer of one state's QuickBooks company, by name."""
+    rows = con.execute("SELECT company, id, name, city, state FROM qbo_customers "
+                       "WHERE company = ?", (company,)).fetchall()
     return sorted(rows, key=lambda r: (r["name"] or "").casefold())
 
 

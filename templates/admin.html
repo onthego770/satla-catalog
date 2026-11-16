@@ -14,6 +14,9 @@
       <label class="field" for="a-name">Name<input class="inp" id="a-name" name="name" required></label>
       <label class="field" for="a-email">Email<input class="inp" id="a-email" name="email" type="email" inputmode="email" autocapitalize="none" required></label>
       <label class="field" for="a-pw">Password (at least {{ min_password }} characters)<input class="inp" id="a-pw" name="password" type="text" minlength="{{ min_password }}" autocomplete="off" required></label>
+      <fieldset class="pick"><legend>States this login can use</legend>
+        {% for code, st in g.states.items() %}<label class="opt"><input type="checkbox" name="states" value="{{ code }}"><span>{{ st['name'] }}</span></label>{% endfor %}
+      </fieldset>
       <label class="opt"><input type="checkbox" name="is_admin" value="1"><span>Admin (can manage logins)</span></label>
       <button class="btn pri" type="submit">Add login</button>
       <p class="meta">Tell the person their password yourself. The site does not email it.</p>
@@ -27,9 +30,15 @@
             <b>{{ u['name'] }}</b>{% if u['id'] == g.user['id'] %} <span class="meta">(you)</span>{% endif %}
             {% if u['is_admin'] %}<span class="st">ADMIN</span>{% endif %}
             {% if not u['active'] %}<span class="st open">OFF</span>{% endif %}
+            {% if not u['states'] %}<span class="st open">NO STATE</span>{% endif %}
             <br><span class="meta">{{ u['email'] }} · since {{ u['created_at'][:10] }}</span>
           </div>
           <div class="uacts">
+            <form method="post" class="srow">
+              <input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="action" value="states"><input type="hidden" name="uid" value="{{ u['id'] }}">
+              {% for code, st in g.states.items() %}<label class="opt"><input type="checkbox" name="states" value="{{ code }}"{% if code in u['states'] %} checked{% endif %} aria-label="{{ st['name'] }} for {{ u['name'] }}"><span>{{ code }}</span></label>{% endfor %}
+              <button class="btn sm" type="submit">Save states</button>
+            </form>
             <form method="post" class="srow">
               <input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="action" value="password"><input type="hidden" name="uid" value="{{ u['id'] }}">
               <input class="inp sm" name="password" type="text" minlength="{{ min_password }}" placeholder="New password" aria-label="New password for {{ u['name'] }}" autocomplete="off" required>
@@ -49,6 +58,7 @@
         </div>
         {% endfor %}
       </div>
+      <p class="meta">A login sees only the states ticked for it: that state's catalog, customers and orders.</p>
       <p class="meta">A login that is switched off cannot sign in; switching it on again keeps its password.</p>
     </div>
   </div>

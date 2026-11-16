@@ -2,6 +2,12 @@
 product page; Stage 2: customers, customer page with order history, invoice;
 Stage 3: New Order and Copy Order, sent as an email; Admin page for logins).
 
+Illinois and Florida are kept completely apart (owner, 2026-11-15): each has its
+own products, stock, prices, customers and orders. A login is given the states
+it may use; the switch in the header picks the one every page shows (`g.state`).
+The states themselves come from the library's STATES table by way of the
+refresh, so nothing in this file names a state.
+
 Run by gunicorn as the systemd service `catalog-web` (127.0.0.1:5001) behind
 Caddy, the same arrangement as orders.satlaspirits.com.
 
@@ -69,11 +75,21 @@ def _throttled(ip):
 def _open_db():
     g.db = db.connect()
     g.user = None
+    g.states, g.allowed, g.state = {}, [], None
     uid = session.get("uid")
     if uid:
         user = db.user_by_id(g.db, uid)
         if user and user["active"]:
             g.user = user
+            # g.states: every state the site knows. g.allowed: the ones this
+            # login may use. g.state: the one the switch is on.
+            g.states = db.states(g.db)
+            mine = db.user_states(user)
+            g.allowed = [code for code in g.states if code in mine]
+            if session.get("state") in g.allowed:
+                g.state = session["state"]
+            elif g.allowed:
+                g.state = g.allowed[0]
         else:
             session.clear()
 
@@ -119,8 +135,25 @@ def login_required(view):
             if request.path.startswith("/photo/"):
                 abort(401)
             return redirect(url_for("login", next=request.full_path.rstrip("?")))
+        if g.state is None:
+            return render_template("message.html", title="No state yet", message=(
+                "This login has not been given a state yet. "
+                "Ask an admin to tick one for you on the Admin page.")), 403
         return view(*args, **kwargs)
     return wrapped
+
+
+def _use_state(code):
+    """A page that belongs to one state (a customer, an invoice, an order): refuse
+    it to a login without that state, and move the switch to it."""
+    if code not in g.allowed:
+        abort(404)
+    if code != g.state:
+        session["state"] = g.state = code
+
+
+def _state_name(code):
+    return g.states[code]["name"]
 
 
 @app.context_processor
@@ -179,23 +212,48 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/state", methods=["POST"])
+@login_required
+def set_state():
+    """The header switch: show another state's catalog and customers."""
+    code = request.form.get("state")
+    if code not in g.allowed:
+        abort(400)
+    session["state"] = code
+    return redirect(url_for("customers" if request.form.get("section") == "customers"
+                            else "catalog"))
+
+
 # --- catalog ------------------------------------------------------------------
+# A state's catalog is db.state_products(): the catalog products that have a
+# record in that state's inventory (Illinois, a record in MMK; Florida, an active
+# item in QuickBooks Florida), in stock or not. Florida also lists the QuickBooks
+# Florida items that have no catalog entry yet, marked "Not in catalog" (the
+# owner, 2026-11-15: "This gives us an idea of what is missing").
 
 @app.route("/")
 def home():
     return redirect(url_for("catalog"))
 
 
+def _kfp(r):
+    """Kosher for Passover, the owner's rule (2026-11-15): every wine is, all
+    year round; anything else only when the product data says "Yes"."""
+    return "Yes" if r["category"] == "Wine" else r["kfp"]
+
+
 @app.route("/catalog")
 @login_required
 def catalog():
     # Short keys keep the page small; the grid needs no descriptions.
+    # `x` marks an item with no catalog entry.
     products = [{
         "sku": r["sku"], "name": r["name"], "size": r["size"], "brand": r["brand"],
         "cat": r["category"], "type": r["type"], "sweet": r["sweetness"],
         "grape": r["grape"], "country": r["country"], "region": r["region"],
-        "mev": r["mevushal"], "kfp": r["kfp"], "org": r["organic"], "vint": r["vintage"],
-    } for r in db.all_products(g.db)]
+        "mev": r["mevushal"], "kfp": _kfp(r), "org": r["organic"], "vint": r["vintage"],
+        **({"x": 1} if r["uncataloged"] else {}),
+    } for r in db.state_products(g.db, g.state)]
     return render_template("catalog.html", products=products)
 
 
@@ -214,49 +272,46 @@ def _cases(value):
     return f"{round(value, 2):g}"
 
 
-def _state_figures(sku):
-    """Regular price per case and cases on hand for Illinois and Florida, from the
-    last snapshot. Illinois price: QuickBooks Illinois. Illinois on hand: MMK.
-    Florida price and on hand: QuickBooks Florida."""
-    il, fl, mmk = (db.snapshot(g.db, s) for s in ("qbo_il", "qbo_fl", "mmk_il"))
+def _state_figures(sku, state):
+    """Regular price per case and cases on hand in one state, from the last
+    snapshot: the price from that state's QuickBooks company, on hand from its
+    inventory system."""
+    qbo, inv = db.snapshot(g.db, db.qbo_source(state)), db.snapshot(g.db, db.inv_source(state))
+    name = _state_name(state)
 
-    def price(snap):
-        if snap["data"] is None:
-            return {"text": "Unavailable", "muted": True}
-        item = snap["data"].get(sku)
-        if not item or item.get("price") is None:
-            return {"text": "No price in QuickBooks", "muted": True}
-        return {"text": f"${item['price']:,.2f}", "muted": False}
-
-    if mmk["data"] is None:
-        il_hand = {"text": "Unavailable", "muted": True}
+    if qbo["data"] is None:
+        price = {"text": "Unavailable", "muted": True}
+    elif (qbo["data"].get(sku) or {}).get("price") is None:
+        price = {"text": f"No price in QuickBooks {name}", "muted": True}
     else:
-        # MMK lists in-stock products only: absent means none available.
-        il_hand = {"text": _cases(mmk["data"].get(sku) or 0), "muted": False}
-    if fl["data"] is None:
-        fl_hand = {"text": "Unavailable", "muted": True}
+        price = {"text": f"${qbo['data'][sku]['price']:,.2f}", "muted": False}
+    if inv["data"] is None:
+        hand = {"text": "Unavailable", "muted": True}
+    elif inv["data"].get(sku) is None:
+        hand = {"text": "—", "muted": True}
     else:
-        item = fl["data"].get(sku)
-        qty = item.get("qty") if item else None
-        fl_hand = ({"text": "—", "muted": True} if qty is None
-                   else {"text": _cases(qty), "muted": False})
+        hand = {"text": _cases(inv["data"][sku]), "muted": False}
 
     sources = []
-    for label, snap in (("Illinois price: QuickBooks Illinois", il),
-                        ("Illinois on hand: MMK", mmk),
-                        ("Florida price and on hand: QuickBooks Florida", fl)):
+    for label, snap in ((f"Regular price: QuickBooks {name}", qbo),
+                        (f"On hand: {g.states[state]['inventory']}", inv)):
         sources.append({"label": label, "as_of": _when(snap["fetched_at"]),
                         "stale": not snap["ok"], "tried": _when(snap["attempted_at"])})
-    return {"il_price": price(il), "fl_price": price(fl),
-            "il_hand": il_hand, "fl_hand": fl_hand, "sources": sources}
+    return {"state": name, "price": price, "hand": hand, "sources": sources}
 
 
 @app.route("/product/<path:sku>")
 @login_required
 def product(sku):
-    p = db.product(g.db, sku)
+    p = db.state_product(g.db, g.state, sku)
     if p is None:
-        abort(404)
+        other = db.product(g.db, sku)
+        if other is None:
+            abort(404)
+        if db.snapshot(g.db, db.inv_source(g.state))["data"] is not None:
+            return render_template("message.html", title="Not in this state", message=(
+                f"{other['name']} is not in the {_state_name(g.state)} catalog.")), 404
+        p = dict(other, uncataloged=False)      # inventory never read yet: show it
     bpc = p["bottles_per_case"]
     facts = [
         ("Brand", p["brand"]), ("Category", p["category"]), ("Type", p["type"]),
@@ -265,20 +320,18 @@ def product(sku):
         ("Sub-region / appellation", p["subregion"]), ("ABV", p["abv"]),
         ("Vintage", p["vintage"]), ("Bottle size", p["size"]),
         ("Bottles per case", _cases(bpc) if bpc else ""),
-        ("Kosher", p["kosher"]), ("Mevushal", p["mevushal"]),
-        ("Kosher for Passover", p["kfp"]), ("Organic", p["organic"]),
+        ("Mevushal", p["mevushal"]), ("Organic", p["organic"]),
         ("Kosher certifier", p["certifier"]), ("SKU", p["sku"]),
     ]
-    return render_template("product.html", p=p, facts=facts, live=_state_figures(sku))
+    return render_template("product.html", p=p, facts=facts, live=_state_figures(sku, g.state),
+                           inventory_name=g.states[g.state]["inventory"])
 
 
 # --- customers and order history (Stage 2) ------------------------------------
-# Everything here is the last copy read from QuickBooks (both companies) by the
-# refresh timer. Customers and orders come from QuickBooks only, so KOVAL
-# customers and orders, which live only in MMK, never appear.
-
-COMPANY_NAMES = {"IL": "Illinois", "FL": "Florida"}
-COMPANY_SOURCE = {"IL": "qbo_il", "FL": "qbo_fl"}
+# Everything here is the last copy read from each state's QuickBooks company by
+# the refresh timer. A customer belongs to the state whose QuickBooks company
+# holds it. Customers and orders come from QuickBooks only, so KOVAL customers
+# and orders, which live only in MMK, never appear.
 
 
 @app.template_filter("money")
@@ -296,8 +349,8 @@ def _day(iso_date):
 def _qbo_sources(companies):
     out = []
     for code in companies:
-        snap = db.snapshot(g.db, COMPANY_SOURCE[code])
-        out.append({"label": COMPANY_NAMES[code], "as_of": _when(snap["fetched_at"]),
+        snap = db.snapshot(g.db, db.qbo_source(code))
+        out.append({"label": _state_name(code), "as_of": _when(snap["fetched_at"]),
                     "stale": not snap["ok"]})
     return out
 
@@ -306,14 +359,15 @@ def _qbo_sources(companies):
 @login_required
 def customers():
     rows = [{"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
-             "st": r["state"]} for r in db.customers(g.db)]
+             "st": r["state"]} for r in db.customers(g.db, g.state)]
     return render_template("customers.html", customers=rows,
-                           sources=_qbo_sources(("IL", "FL")))
+                           sources=_qbo_sources((g.state,)))
 
 
-@app.route("/customer/<any(IL, FL):company>/<cid>")
+@app.route("/customer/<company>/<cid>")
 @login_required
 def customer(company, cid):
+    _use_state(company)
     c = db.customer(g.db, company, cid)
     if c is None:
         abort(404)
@@ -324,23 +378,25 @@ def customer(company, cid):
     place = " ".join(x for x in (", ".join(x for x in (c["city"], c["state"]) if x), c["zip"]) if x)
     address = ", ".join(x for x in (c["street"], place) if x)
     return render_template("customer.html", c=c, address=address, invoices=invoices,
-                           company_name=COMPANY_NAMES[company],
+                           company_name=_state_name(company),
                            sources=_qbo_sources((company,)))
 
 
-@app.route("/invoice/<any(IL, FL):company>/<iid>")
+@app.route("/invoice/<company>/<iid>")
 @login_required
 def invoice(company, iid):
+    _use_state(company)
     v = db.invoice(g.db, company, iid)
     if v is None:
         abort(404)
     c = db.customer(g.db, company, v["customer_id"])
     lines, product_sum = [], 0.0
+    products = {p["sku"]: p for p in db.state_products(g.db, company)}
     for ln in json.loads(v["lines"]):
-        p = db.product(g.db, ln["sku"]) if ln["sku"] else None
+        p = products.get(ln["sku"])
         product_sum += ln["amount"] or 0
-        # A catalog product shows its SKU and size; anything else (QuickBooks has
-        # many items that are not in the catalog) shows its QuickBooks name only.
+        # A product of this state shows its SKU and size and links to its page;
+        # anything else (QuickBooks holds old items) shows its QuickBooks name only.
         detail = " · ".join(x for x in (ln["sku"], p["size"] if p else "") if x)
         lines.append({"name": ln["name"], "sku": ln["sku"], "in_catalog": p is not None,
                       "detail": detail,
@@ -352,7 +408,7 @@ def invoice(company, iid):
                            is_open=(v["balance"] or 0) > 0.004,
                            adjustment=adjustment if abs(adjustment) >= 0.01 else None,
                            customer_name=c["name"] if c else "Customer",
-                           company_name=COMPANY_NAMES[company],
+                           company_name=_state_name(company),
                            sources=_qbo_sources((company,)))
 
 
@@ -362,43 +418,39 @@ def invoice(company, iid):
 # Catalog.db, writes the email and hands it to the library's mail_send.
 
 def _order_products(company, cid):
-    """Every catalog product as the order screen needs it for one customer:
-    `reg` is the regular price per case in the customer's own QuickBooks company
+    """Every product of the customer's state as the order screen needs it:
+    `reg` is the regular price per case in that state's QuickBooks company
     (None = cannot be ordered), `prev` is what this customer last paid, `hand`
-    is cases on hand (Illinois: MMK; Florida: QuickBooks Florida)."""
-    prices = db.snapshot(g.db, COMPANY_SOURCE[company])["data"] or {}
-    mmk = db.snapshot(g.db, "mmk_il")["data"] if company == "IL" else None
+    is cases on hand in that state's inventory. A product the state does not
+    have is not listed, so it cannot be ordered there."""
+    prices = db.snapshot(g.db, db.qbo_source(company))["data"] or {}
+    have = db.snapshot(g.db, db.inv_source(company))["data"] or {}
     last = db.last_prices(g.db, company, cid)
     out = []
-    for r in db.all_products(g.db):
+    for r in db.state_products(g.db, company):
         sku = r["sku"]
-        item = prices.get(sku) or {}
-        if company == "IL":
-            hand = None if mmk is None else (mmk.get(sku) or 0)
-        else:
-            hand = item.get("qty")
-        prev = last.get(sku)
+        hand, prev = have[sku], last.get(sku)
         out.append({"sku": sku, "name": r["name"], "size": r["size"], "brand": r["brand"],
                     "cat": r["category"], "grape": r["grape"], "country": r["country"],
-                    "region": r["region"], "reg": item.get("price"),
+                    "region": r["region"], "reg": (prices.get(sku) or {}).get("price"),
                     "hand": _cases(hand) if hand is not None else None,
                     "prev": {"p": prev["price"], "d": _day(prev["date"])} if prev else None})
     return out
 
 
 def _order_sources(company):
-    names = (("Regular prices: QuickBooks " + COMPANY_NAMES[company], COMPANY_SOURCE[company]),
-             ("On hand: MMK", "mmk_il") if company == "IL" else None)
     out = []
-    for label, source in filter(None, names):
+    for label, source in (("Regular prices: QuickBooks " + _state_name(company), db.qbo_source(company)),
+                          ("On hand: " + g.states[company]["inventory"], db.inv_source(company))):
         snap = db.snapshot(g.db, source)
         out.append({"label": label, "as_of": _when(snap["fetched_at"]), "stale": not snap["ok"]})
     return out
 
 
-@app.route("/order/<any(IL, FL):company>/<cid>")
+@app.route("/order/<company>/<cid>")
 @login_required
 def order(company, cid):
+    _use_state(company)
     c = db.customer(g.db, company, cid)
     if c is None:
         abort(404)
@@ -411,7 +463,7 @@ def order(company, cid):
         copy = {"doc": v["doc_number"],
                 "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": ln["qty"]}
                           for ln in json.loads(v["lines"])]}
-    info = {"co": company, "id": cid, "name": c["name"], "state": COMPANY_NAMES[company],
+    info = {"co": company, "id": cid, "name": c["name"], "state": _state_name(company),
             "to": ORDER_TO, "me": g.user["email"], "copy": copy,
             "back": url_for("customer", company=company, cid=cid),
             "send": url_for("order_send", company=company, cid=cid),
@@ -431,11 +483,12 @@ def _checked_order(company, cid, payload):
     for ln in raw[:300]:
         p = products.get(str(ln.get("sku")))
         if p is None or p["sku"] in seen:
-            raise ValueError("The order holds a product that is not in the catalog.")
+            raise ValueError("The order holds a product that is not in the "
+                             f"{_state_name(company)} catalog.")
         seen.add(p["sku"])
         if p["reg"] is None:
             raise ValueError(f"{p['name']} has no regular price in QuickBooks "
-                             f"{COMPANY_NAMES[company]}, so it cannot be ordered.")
+                             f"{_state_name(company)}, so it cannot be ordered.")
         try:
             cases, price = round(float(ln.get("cases")), 2), round(float(ln.get("price")), 2)
         except (TypeError, ValueError):
@@ -458,10 +511,11 @@ def _order_email(c, company, lines, note):
     wireframes (screen 9)."""
     today = datetime.now(OFFICE_TZ).strftime("%b %-d, %Y")
     subject = f"New order — {c['name']} — {today}"
-    rows = [f"{ln['p']['sku']}  {ln['p']['name']} ({ln['p']['size']})\n"
+    rows = [f"{ln['p']['sku']}  {ln['p']['name']}"
+            + (f" ({ln['p']['size']})" if ln['p']['size'] else "") + "\n"
             f"   {_cases(ln['cases'])} {'case' if ln['cases'] == 1 else 'cases'} @ "
             f"{money(ln['price'])} per case ({ln['src']}) = {money(ln['total'])}" for ln in lines]
-    body = (f"Customer: {c['name']} ({COMPANY_NAMES[company]})\n"
+    body = (f"Customer: {c['name']} ({_state_name(company)})\n"
             f"Salesman: {g.user['name']} <{g.user['email']}>\n\n" + "\n".join(rows) +
             f"\n\nOrder total: {money(sum(ln['total'] for ln in lines))}\n"
             f"Note: {note or 'none'}\n")
@@ -490,9 +544,10 @@ def _send_order_email(subject, body):
     return None
 
 
-@app.route("/order/<any(IL, FL):company>/<cid>/send", methods=["POST"])
+@app.route("/order/<company>/<cid>/send", methods=["POST"])
 @login_required
 def order_send(company, cid):
+    _use_state(company)
     c = db.customer(g.db, company, cid)
     if c is None:
         abort(404)
@@ -525,6 +580,7 @@ def admin_users():
     if request.method == "POST":
         f = request.form
         action = f.get("action")
+        states = [code for code in g.states if code in f.getlist("states")]
         if action == "add":
             name, email, pw = (f.get("name") or "").strip(), (f.get("email") or "").strip().lower(), f.get("password") or ""
             if not name or "@" not in email:
@@ -533,9 +589,12 @@ def admin_users():
                 error = f"The password needs at least {MIN_PASSWORD} characters."
             elif db.user_by_email(g.db, email):
                 error = f"{email} already has a login."
+            elif not states:
+                error = "Tick at least one state for the login."
             else:
-                db.add_user(g.db, name, email, generate_password_hash(pw), f.get("is_admin") == "1")
-                note = f"Login created for {name}."
+                db.add_user(g.db, name, email, generate_password_hash(pw),
+                            f.get("is_admin") == "1", states)
+                note = f"Login created for {name} ({', '.join(states)})."
         else:
             user = db.user_by_id(g.db, f.get("uid"))
             if user is None:
@@ -548,6 +607,13 @@ def admin_users():
                 else:
                     db.update_user(g.db, user["id"], password_hash=generate_password_hash(pw))
                     note = f"Password changed for {user['name']}."
+            elif action == "states":
+                if not states:
+                    error = ("A login needs at least one state. "
+                             "To stop someone signing in, switch the login off.")
+                else:
+                    db.update_user(g.db, user["id"], states=",".join(states))
+                    note = f"{user['name']} can now use: {', '.join(states)}."
             elif action in ("active", "admin"):
                 field = "active" if action == "active" else "is_admin"
                 turn_on = f.get("value") == "1"
@@ -559,7 +625,8 @@ def admin_users():
                     note = f"{what} switched {'on' if turn_on else 'off'} for {user['name']}."
             else:
                 abort(400)
-    return render_template("admin.html", users=db.users(g.db), note=note, error=error,
+    users = [{**dict(u), "states": db.user_states(u)} for u in db.users(g.db)]
+    return render_template("admin.html", users=users, note=note, error=error,
                            min_password=MIN_PASSWORD), (400 if error else 200)
 
 

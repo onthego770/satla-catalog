@@ -8,7 +8,8 @@ Run with the library's Python, by explicit path:
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py load-products
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py load-pack
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py refresh
-  ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py add-user "Full Name" name@example.com
+  ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py add-user "Full Name" name@example.com --states IL,FL
+  ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py set-states name@example.com IL
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py set-password name@example.com
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py remove-user name@example.com
   ~/python/venvs/qbo311/bin/python3 ~/python/catalog/manage.py list-users
@@ -26,7 +27,8 @@ order-email    Switch the sending of New Order emails on or off. While it is off
                Send order shows the email it would send and sends nothing. The
                email goes out from the mailbox in ~/python/config/mail_config.json
                through the library's mail_send.send_mail().
-add-user       Create a salesman login. The password is typed at a hidden prompt;
+set-states     Set which states a login may use (IL, FL, or IL,FL).
+add-user       Create a salesman login for the states given with --states. The password is typed at a hidden prompt;
                never put a password on the command line or in a chat.
 """
 import argparse
@@ -101,14 +103,35 @@ def _ask_password():
         print("The two did not match.")
 
 
+def _states(con, text):
+    """'il, fl' as ['IL', 'FL'], checked against the states the site knows."""
+    known = db.states(con)
+    codes = [c.strip().upper() for c in text.split(",") if c.strip()]
+    bad = [c for c in codes if c not in known]
+    if bad or not codes:
+        sys.exit(f"unknown state {', '.join(bad) or '(none given)'}; the states are: {', '.join(known)}")
+    return [c for c in known if c in codes]
+
+
 def cmd_add_user(args):
     email = args.email.strip().lower()
     con = db.connect()
+    states = _states(con, args.states)
     if db.user_by_email(con, email):
         sys.exit(f"{email} already has a login. Use set-password to change it.")
     pw = _ask_password()
-    db.add_user(con, args.name, email, generate_password_hash(pw))
-    print(f"login created for {args.name} <{email}>")
+    db.add_user(con, args.name, email, generate_password_hash(pw), states=states)
+    print(f"login created for {args.name} <{email}>, states: {', '.join(states)}")
+
+
+def cmd_set_states(args):
+    con = db.connect()
+    user = db.user_by_email(con, args.email)
+    if not user:
+        sys.exit(f"no login for {args.email}")
+    states = _states(con, args.states)
+    db.update_user(con, user["id"], states=",".join(states))
+    print(f"{user['email']} may now use: {', '.join(states)}")
 
 
 def cmd_set_password(args):
@@ -137,7 +160,7 @@ def cmd_list_users(_args):
         print("no logins yet")
     for r in rows:
         print(f"{r['name']:<28} {r['email']:<36} {'active' if r['active'] else 'OFF':<6} "
-              f"{'ADMIN' if r['is_admin'] else '':<5}  since {r['created_at'][:10]}")
+              f"{'ADMIN' if r['is_admin'] else '':<5} {r['states'] or 'NO STATE':<8} since {r['created_at'][:10]}")
 
 
 def cmd_set_admin(args):
@@ -171,7 +194,12 @@ def main():
     au = sub.add_parser("add-user")
     au.add_argument("name")
     au.add_argument("email")
+    au.add_argument("--states", required=True, help="the states this login may use: IL, FL or IL,FL")
     au.set_defaults(func=cmd_add_user)
+    ss = sub.add_parser("set-states")
+    ss.add_argument("email")
+    ss.add_argument("states", help="IL, FL or IL,FL")
+    ss.set_defaults(func=cmd_set_states)
     for name, func in (("set-password", cmd_set_password), ("remove-user", cmd_remove_user)):
         sp = sub.add_parser(name)
         sp.add_argument("email")

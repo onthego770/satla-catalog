@@ -1,30 +1,32 @@
 """Reads of QuickBooks and MMK for the catalog site. READ-ONLY.
 
 Every call here goes through the existing library in ~/python/qbo_scripts (the
-code behind orders.satlaspirits.com). Nothing is reimplemented:
+code behind orders.satlaspirits.com). Nothing is reimplemented, and nothing here
+knows which system a state keeps its inventory in: the library's STATES table
+does (Illinois: MMK; Florida: QuickBooks Florida), so a state added there shows
+up on the site at the next refresh.
 
-  Regular price, Florida on hand   mmk_common.get_current_inventory_qbo(qb)
-                                   (column unit_price; qty_on_hand)
-  Customers                        qbo.fetch_customers(qb)
-  Invoices (all of them: the last  qbo.fetch_invoices_since(qb, date)
+  Which products a state has, and   mmk_common.get_current_inventory(state)
+    its cases on hand
+  Regular price                     mmk_common.get_regular_prices(state)
+  Customers                         qbo.fetch_customers(qb)
+  Invoices (all of them: the last   qbo.fetch_invoices_since(qb, date)
     12 months are shown; older ones
     only supply previous prices)
-  Invoice line items, with SKUs    qbo.fetch_item_skus() + qbo.build_orders()
-  Illinois on hand                 mmk_common.get_current_inventory_mmk()
-  Bottles per case, ml             the bpc / vol_ml columns of those same two reads
+  Invoice line items, with SKUs     qbo.fetch_item_skus() + qbo.build_orders()
+  Bottles per case, ml              the bpc / vol_ml columns of the first two
 
 Run with ~/python/venvs/qbo311/bin/python3 (the library's environment). The web
 worker never imports this module: `manage.py refresh` runs it on a timer and
-stores the result in Catalog.db's live_snapshot table, so a page view costs no
-QuickBooks or MMK call and never touches the QuickBooks token.
+stores the result in Catalog.db, so a page view costs no QuickBooks or MMK call
+and never touches the QuickBooks token.
 
 Two rules inherited from the library's notes:
-  * A QuickBooks client always comes from qbo.qbo_client(); the library function
-    used here does that itself.
+  * A QuickBooks client always comes from qbo.qbo_client().
   * A scheduled job must NEVER trigger an MMK login (reCAPTCHA; an account lock
-    would take the order system down). So MMK is read only when the saved login
-    is already alive; otherwise the read is skipped and the page shows the last
-    known figures with their time.
+    would take the order system down). So inventory is read with
+    mmk_login=False: when the saved MMK login is not alive the read is skipped
+    and the page shows the last known figures with their time.
 """
 import sys
 from datetime import date, timedelta
@@ -33,13 +35,6 @@ from pathlib import Path
 import catalog_db as db
 
 LIBRARY = Path.home() / "python" / "qbo_scripts"
-FL_CONFIG = Path.home() / "python" / "config" / "qbo_config_fl.json"
-
-# company code -> (snapshot source key, plain name, QuickBooks config path;
-# None is the library's default, the Illinois company)
-COMPANIES = {"IL": ("qbo_il", "QuickBooks Illinois", None),
-             "FL": ("qbo_fl", "QuickBooks Florida", FL_CONFIG)}
-MMK_SOURCE = "mmk_il"
 HISTORY_DAYS = 365          # order history: QuickBooks invoices, last 12 months
 ALL_INVOICES_FROM = "2000-01-01"   # previous prices use every invoice, however old
 
@@ -59,72 +54,50 @@ def _num(value):
     return float(value)
 
 
-def read_qbo_items(qb, catalog_skus):
-    """{sku: {price, qty, bpc, ml}} for the catalog's SKUs in one QuickBooks
-    company (`qb` is a client from qbo.qbo_client()).
-
-    `price` is the regular price per case (None when QuickBooks has none set);
-    `qty` is quantity on hand in cases (None for a non-inventory item). Where
-    QuickBooks holds two items with the same SKU, the active Inventory one wins.
-    """
-    mc = _library()
-    df = mc.get_current_inventory_qbo(qb=qb)
-    df = df[df["sku"].isin(catalog_skus)].copy()
-    df["_rank"] = (df["active"].fillna(False).astype(bool) * 2
-                   + (df["type"] == "Inventory") * 1)
-    df = df.sort_values("_rank", ascending=False).drop_duplicates("sku")
-    out = {}
-    for r in df.itertuples():
-        price = _num(r.unit_price)
-        out[r.sku] = {"price": price if price and price > 0 else None,
-                      "qty": _num(r.qty_on_hand),
-                      "bpc": _num(r.bpc), "ml": _num(r.vol_ml)}
-    return out
+def _wanted(df, skus):
+    """The rows of a library table for the SKUs in `skus`; None = every row."""
+    return df if skus is None else df[df["sku"].isin(skus)]
 
 
-def read_mmk_stock(catalog_skus):
-    """{sku: {cases, bpc, ml}} for the catalog's SKUs that MMK has IN STOCK.
-
-    MMK's report lists in-stock products only, so a catalog SKU that is absent
-    here has 0 available. Raises RuntimeError, without attempting a login, when
-    the saved MMK login is not alive.
-    """
-    mc = _library()
-    config = mc.load_config(mc.DEFAULT_CONFIG)
-    state = mc.cached_session_status(config)
-    if state != "alive":
-        raise RuntimeError(f"the saved MMK login is {state}; sign in on the MMK login "
-                           "tab of orders.satlaspirits.com")
-    df = mc.get_current_inventory_mmk(config=config)
-    df = df[df["sku"].isin(catalog_skus)]
-    return {r.sku: {"cases": _num(r.available_cases), "bpc": _num(r.bpc),
-                    "ml": _num(r.vol_ml)} for r in df.itertuples()}
+def read_inventory(state, skus, qb=None):
+    """{sku: {cases, bpc, ml, name}} for the SKUs in `skus` (None = every item)
+    that have a record in the state's inventory system (in stock or not; `cases`
+    is None only for an item QuickBooks does not track; `name` is that system's
+    name for the item). A SKU absent here is not sold in that state. Never
+    triggers an MMK login."""
+    df = _wanted(_library().get_current_inventory(state, qb=qb, mmk_login=False), skus)
+    return {r.sku: {"cases": _num(r.cases_on_hand), "bpc": _num(r.bpc),
+                    "ml": _num(r.vol_ml), "name": r.name} for r in df.itertuples()}
 
 
-def read_company(config_path, catalog_skus):
-    """One QuickBooks company in ONE client session (one token handshake):
-    its catalog items, its customers, and its invoices.
+def read_company(state, qb, skus):
+    """One state's QuickBooks company through ONE client session `qb`: the
+    regular prices of the items in `skus` (None = every item), its customers,
+    and its invoices.
 
-    Returns (items, customers, invoices, last_prices). `customers` and `invoices`
+    Returns (items, customers, invoices, last_prices). `items` is
+    {sku: {price, bpc, ml}}; `price` is the regular price per case (None when
+    QuickBooks has none set). `customers` and `invoices`
     are rows ready for Catalog.db: a customer's address is the billing address,
     or the shipping address when there is no billing one; an invoice carries its
     product lines as [{sku, name, qty, price, amount}], exactly as QuickBooks
     holds them. `invoices` covers the last 12 months only.
 
     `last_prices` is {(customer_id, sku): (price, 'YYYY-MM-DD')}: for each
-    customer and catalog product, the price per case on the most recent invoice
+    customer and each of those items, the price per case on the most recent invoice
     that includes it, however old (wireframe rule, approved 2026-11-12). A line
     with no price or a price of zero (a free sample) is not a previous price.
     """
-    _library()
+    mc = _library()
     import qbo_mmk_salesorder as qbo
 
     since = date.today() - timedelta(days=HISTORY_DAYS)
-    with qbo.qbo_client(config_path) as qb:
-        items = read_qbo_items(qb, catalog_skus)
-        raw_customers = qbo.fetch_customers(qb)
-        raw_invoices = qbo.fetch_invoices_since(qb, ALL_INVOICES_FROM)
-        sku_map = qbo.fetch_item_skus(qb, raw_invoices)
+    prices = mc.get_regular_prices(state, qb=qb)
+    items = {r.sku: {"price": _num(r.unit_price), "bpc": _num(r.bpc), "ml": _num(r.vol_ml)}
+             for r in _wanted(prices, skus).itertuples()}
+    raw_customers = qbo.fetch_customers(qb)
+    raw_invoices = qbo.fetch_invoices_since(qb, ALL_INVOICES_FROM)
+    sku_map = qbo.fetch_item_skus(qb, raw_invoices)
     customers = []
     for c in raw_customers:
         addr = c["billing"] if (c["billing"]["street"] or c["billing"]["city"]) else c["shipping"]
@@ -137,7 +110,7 @@ def read_company(config_path, catalog_skus):
         day = o["date"].strftime("%Y-%m-%d")
         for ln in o["lines"]:
             price = _num(ln["price"])
-            if ln["sku"] in catalog_skus and price and price > 0:
+            if ln["sku"] in items and price and price > 0:
                 last_prices[(str(o["customer_id"]), ln["sku"])] = (price, day)
         if day < cutoff:
             continue
@@ -152,48 +125,85 @@ def read_company(config_path, catalog_skus):
 
 
 def refresh(log=print):
-    """Read every source and store it in Catalog.db. One source failing does not
-    stop the others; a failure keeps that source's last good figures."""
+    """Read every state and store it in Catalog.db. One source failing does not
+    stop the others; a failure keeps that source's last good figures.
+
+    Stored per state (codes come from the library's STATES): snapshot
+    `qbo_<st>` = {sku: {price}}, snapshot `inv_<st>` = {sku: cases on hand} for
+    the products that state has, and its customers / invoices / last prices.
+    Snapshot `states` is the list of states itself, for the web pages.
+
+    A state whose STATES row says `catalog_all` lists every item of its
+    inventory, not only the catalog's products: snapshot `extra_<st>` =
+    {sku: {name, ml, bpc}} holds the ones with no catalog entry (empty for any
+    other state), so the pages can show them and say what is missing.
+    """
+    mc = _library()
+    import qbo_mmk_salesorder as qbo
+
     db.init()                                        # creates any missing table
     con = db.connect()
     catalog_skus = db.skus(con)
+    db.save_snapshot(con, db.STATES_SOURCE, payload={
+        code: {"name": info["name"], "inventory": info["inventory_name"]}
+        for code, info in mc.STATES.items()})
     results = {}
-    for company, (source, label, path) in COMPANIES.items():
+
+    def inventory(state, qb):
+        """Read and store one state's inventory; never raises."""
+        source = db.inv_source(state)
         try:
-            data, customers, invoices, last_prices = read_company(path, catalog_skus)
-            db.replace_company(con, company, customers, invoices, last_prices)
-            db.save_snapshot(con, source, payload={
-                s: {"price": v["price"], "qty": v["qty"]} for s, v in data.items()})
+            data = read_inventory(state, keep, qb=qb)
+            extra = {s: {"name": v["name"], "ml": v["ml"], "bpc": v["bpc"]}
+                     for s, v in data.items() if s not in catalog_skus}
+            db.save_snapshot(con, source, payload={s: v["cases"] for s, v in data.items()})
+            db.save_snapshot(con, db.extra_source(state), payload=extra)
             results[source] = data
-            log(f"{label}: {len(data)} catalog items, {len(customers)} customers, "
-                f"{len(invoices)} invoices, {len(last_prices)} previous prices read")
+            log(f"{label} inventory ({info['inventory_name']}): {len(data) - len(extra)} catalog "
+                f"products, {len(extra)} items with no catalog entry, "
+                f"{sum(1 for v in data.values() if v['cases'])} in stock")
         except Exception as e:                       # noqa: BLE001 - keep going
             db.save_snapshot(con, source, error=f"{type(e).__name__}: {e}")
-            log(f"{label}: FAILED - {type(e).__name__}: {e}")
-    try:
-        data = read_mmk_stock(catalog_skus)
-        db.save_snapshot(con, MMK_SOURCE, payload={s: v["cases"] for s, v in data.items()})
-        results[MMK_SOURCE] = data
-        log(f"MMK: {len(data)} catalog items in stock")
-    except Exception as e:                           # noqa: BLE001
-        db.save_snapshot(con, MMK_SOURCE, error=f"{type(e).__name__}: {e}")
-        log(f"MMK: FAILED - {type(e).__name__}: {e}")
+            log(f"{label} inventory ({info['inventory_name']}): FAILED - {type(e).__name__}: {e}")
+
+    for state, info in mc.STATES.items():
+        source, label = db.qbo_source(state), info["name"]
+        keep = None if info.get("catalog_all") else catalog_skus
+        inventory_read = False
+        try:
+            with qbo.qbo_client(info["qbo_config"]) as qb:
+                data, customers, invoices, last_prices = read_company(state, qb, keep)
+                db.replace_company(con, state, customers, invoices, last_prices)
+                db.save_snapshot(con, source, payload={
+                    s: {"price": v["price"]} for s, v in data.items()})
+                results[source] = data
+                log(f"QuickBooks {label}: {len(data)} items, {len(customers)} customers, "
+                    f"{len(invoices)} invoices, {len(last_prices)} previous prices read")
+                inventory_read = True
+                inventory(state, qb)                 # same client when it is QuickBooks
+        except Exception as e:                       # noqa: BLE001 - keep going
+            db.save_snapshot(con, source, error=f"{type(e).__name__}: {e}")
+            log(f"QuickBooks {label}: FAILED - {type(e).__name__}: {e}")
+        if not inventory_read:
+            # QuickBooks failed; inventory kept elsewhere (MMK) can still be read.
+            inventory(state, None)
     con.close()
     return results
 
 
 def load_pack(overwrite=False, log=print):
     """Fill products.bottles_per_case and bottle_ml (item data held in Catalog.db)
-    from QuickBooks Illinois, then QuickBooks Florida, then MMK: the first source
-    that knows the value wins. Blank values only, unless overwrite=True."""
+    from each state's QuickBooks company, then each state's inventory system: the
+    first source that knows the value wins. Blank values only, unless overwrite=True."""
     results = refresh(log=log)
+    sources = sorted(results, key=lambda k: not k.startswith("qbo_"))   # QuickBooks first
     con = db.connect()
     filled = 0
     with con:
         for row in con.execute("SELECT sku, bottles_per_case, bottle_ml FROM products").fetchall():
             if row["bottles_per_case"] and row["bottle_ml"] and not overwrite:
                 continue
-            for source in ("qbo_il", "qbo_fl", MMK_SOURCE):
+            for source in sources:
                 v = results.get(source, {}).get(row["sku"])
                 if v and v.get("bpc") and v.get("ml"):
                     con.execute("UPDATE products SET bottles_per_case=?, bottle_ml=?, "

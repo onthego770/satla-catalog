@@ -12,13 +12,15 @@
   const sid = s => String(s).replace(/[^a-zA-Z0-9]+/g, "_");
 
   P.forEach(p => {
-    p.hay = norm([p.name, p.brand, p.grape, p.country, p.region].join(" "));
+    p.hay = norm([p.name, p.brand, p.grape, p.country, p.region, p.sku].join(" "));
     p.grapes = p.grape ? p.grape.split(/\s*,\s*/) : [];
   });
   P.sort((a, b) => norm(a.brand + a.name).localeCompare(norm(b.brand + b.name)));
 
   /* ---------- menu and filters (agreed 2026-10-29) ---------- */
-  const MENU = [["all", "All"], ["wine", "Wine"], ["spirits", "Spirits"], ["liq", "Liqueurs & Aperitifs"], ["sake", "Sake"], ["rtd", "Ready-to-Drink"], ["brands", "Brands (A–Z)"], ["countries", "Countries"], ["mev", "Kosher & Mevushal"], ["new", "New Arrivals"]];
+  const MENU = [["all", "All"], ["wine", "Wine"], ["spirits", "Spirits"], ["liq", "Liqueurs & Aperitifs"], ["sake", "Sake"], ["rtd", "Ready-to-Drink"], ["brands", "Brands (A–Z)"], ["countries", "Countries"], ["mev", "Mevushal"], ["kfp", "Kosher for Passover"], ["new", "New Arrivals"]];
+  /* Items the state sells that have no catalog entry yet (marked x by the server). */
+  if (P.some(p => p.x)) MENU.push(["nocat", "Not in catalog"]);
   const SUB = {wine: ["Red", "White", "Rosé", "Sparkling", "Orange", "Dessert & Fortified"], spirits: ["Tequila", "Whiskey", "Gin", "Vodka", "Brandy & Cognac"]};
   const ml = s => { const m = /([\d.]+)\s*(ml|l)/i.exec(s || ""); return m ? parseFloat(m[1]) * (m[2].toLowerCase() === "l" ? 1000 : 1) : 0; };
   const FG = [
@@ -37,7 +39,7 @@
 
   /* ---------- state: kept for the browser tab, so "Back to results" returns
      to the same search, menu, filters and scroll position ---------- */
-  const KEY = "satla.catalog.v1";
+  const KEY = "satla.catalog.v2." + document.body.dataset.state;   /* each state keeps its own search and filters */
   const wideQuery = window.matchMedia("(min-width:700px)");
   const S = {q: "", menu: "all", sub: null, f: blankF(), openF: {country: true}, drawer: false, wide: wideQuery.matches, scroll: 0};
   const saved = load(KEY);
@@ -57,6 +59,8 @@
       case "sake": return p.cat === "Sake";
       case "rtd": return p.cat === "Ready-to-Drink";
       case "mev": return p.mev === "Yes";
+      case "kfp": return p.kfp === "Yes";
+      case "nocat": return !!p.x;
       case "new": return false;
       default: return true;
     }
@@ -91,7 +95,7 @@
   /* ---------- view parts ---------- */
   const photo = p => window.Satla.photo(p.sku);
   function badges(p) {
-    return '<div class="tags">' + (p.mev === "Yes" ? '<span class="tag">Mevushal</span>' : "") + (p.kfp === "Yes" ? '<span class="tag">Kosher for Passover</span>' : "") + (p.org === "Yes" ? '<span class="tag">Organic</span>' : "") + "</div>";
+    return '<div class="tags">' + (p.mev === "Yes" ? '<span class="tag">Mevushal</span>' : "") + (p.org === "Yes" ? '<span class="tag">Organic</span>' : "") + (p.x ? '<span class="tag">Not in catalog</span>' : "") + "</div>";
   }
   function filtersHTML(base) {
     let h = '<div class="filters">';
@@ -132,7 +136,7 @@
     }
     h += '<div class="cat">';
     if (S.wide) h += '<div><div class="count"><b>Filters</b>' + (nFilters() ? '<button class="link" data-act="clear">Clear all</button>' : "") + "</div>" + filtersHTML(base) + "</div>";
-    h += '<div class="col"><div class="count"><span><b>' + res.length + "</b> of " + P.length + ' products <span class="kosher">All kosher</span></span>' +
+    h += '<div class="col"><div class="count"><span><b>' + res.length + "</b> of " + P.length + ' products</span>' +
       (S.wide ? "" : '<button class="btn sm" data-act="drawer">Filters' + (nFilters() ? " (" + nFilters() + ")" : "") + "</button>") + "</div>";
     if (nFilters()) {
       h += '<div class="chips" id="active">';
@@ -140,6 +144,7 @@
       h += '<button class="chip" data-act="clear">Clear all</button></div>';
     }
     if (S.menu === "new") h += '<div class="empty"><b>New Arrivals is not set up yet.</b><br>The product data has no arrival date, so nothing can be listed here until the rule is decided.</div>';
+    else if (!P.length) h += '<div class="empty"><b>No products are listed for this state yet.</b><br>They are read every 30 minutes.</div>';
     else if (!res.length) h += '<div class="empty"><b>No products match.</b><br>Remove a filter or change the search.</div>';
     else {
       h += '<div class="grid">';

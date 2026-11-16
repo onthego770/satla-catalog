@@ -9,12 +9,20 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ asset('catalog.css') }}">
 </head>
-<body>
+<body data-state="{{ g.state or '' }}">
 {% if g.user and not hide_appbar %}
 <header class="appbar">
   <div class="wrap">
     <div class="r1">
       <a class="brand" href="{{ url_for('catalog') }}">Satla Spirits</a>
+      {% if g.allowed|length > 1 %}
+      <form class="states" method="post" action="{{ url_for('set_state') }}" role="group" aria-label="State">
+        <input type="hidden" name="csrf" value="{{ form_token() }}">
+        <input type="hidden" name="section" value="{{ section or '' }}">
+        {% for code in g.allowed %}<button type="submit" name="state" value="{{ code }}" aria-pressed="{{ 'true' if code == g.state else 'false' }}" title="{{ g.states[code]['name'] }}">{{ code }}</button>{% endfor %}
+      </form>
+      {% elif g.state %}<span class="st" title="{{ g.states[g.state]['name'] }}">{{ g.state }}</span>
+      {% endif %}
       <form class="who" method="post" action="{{ url_for('logout') }}">
         <input type="hidden" name="csrf" value="{{ form_token() }}">
         <span>{{ g.user['name'] }}</span>

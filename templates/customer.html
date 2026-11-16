@@ -4,7 +4,7 @@
 {% macro val(v) %}{% if v %}{{ v }}{% else %}<span class="meta">—</span>{% endif %}{% endmacro %}
 {% block body %}
 <main class="wrap"><div class="pad">
-  <div><a class="link" href="{{ url_for('customers') }}">‹ All customers</a></div>
+  <div><a class="link" href="{{ url_for('customers') }}">‹ {{ company_name }} customers</a></div>
   <div class="count">
     <div>
       <h2 class="title">{{ c['name'] }}</h2>

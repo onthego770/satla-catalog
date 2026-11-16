@@ -16,22 +16,20 @@
       <span class="eyebrow">{{ p['brand'] }}</span>
       <h2>{{ p['name'] }}</h2>
       <div class="tags">
-        <span class="kosher">Kosher</span>
         {% if p['mevushal'] == 'Yes' %}<span class="tag">Mevushal</span>{% endif %}
-        {% if p['kfp'] == 'Yes' %}<span class="tag">Kosher for Passover</span>{% endif %}
         {% if p['organic'] == 'Yes' %}<span class="tag">Organic</span>{% endif %}
       </div>
+      {% if p['uncataloged'] %}<p class="meta"><span class="tag">Not in catalog</span> This item has no catalog entry yet: no photo, description or product details. The name, bottle size and bottles per case are from {{ inventory_name }}.</p>{% endif %}
       {% if p['description'] %}<p class="desc">{{ p['description'] }}</p>{% endif %}
       <dl class="facts">
         {% for label, value in facts %}<dt>{{ label }}</dt><dd>{{ val(value) }}</dd>{% endfor %}
       </dl>
       <div class="box">
-        <h3>Price and stock by state</h3>
+        <h3>Price and stock: {{ live.state }}</h3>
         <div class="tw"><table>
-          <thead><tr><th></th><th>Illinois</th><th>Florida</th></tr></thead>
           <tbody>
-            <tr><td>Regular price per case</td>{{ fig(live.il_price) }}{{ fig(live.fl_price) }}</tr>
-            <tr><td>On hand (cases)</td>{{ fig(live.il_hand) }}{{ fig(live.fl_hand) }}</tr>
+            <tr><td>Regular price per case</td>{{ fig(live.price) }}</tr>
+            <tr><td>On hand (cases)</td>{{ fig(live.hand) }}</tr>
           </tbody>
         </table></div>
         <ul class="asof">

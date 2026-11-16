@@ -41,7 +41,6 @@ p{margin:0}
 
 .pad{padding:14px;display:flex;flex-direction:column;gap:12px}
 .col{display:flex;flex-direction:column;gap:10px;min-width:0}
-.kosher{font-size:12px;border:1px solid var(--ink);border-radius:999px;padding:2px 9px;white-space:nowrap}
 .field{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:500}
 .inp{border:1.5px solid var(--ink);border-radius:6px;padding:9px 11px;background:var(--sheet);width:100%;min-width:0;font-size:16px}
 .srow{display:flex;gap:8px;align-items:center}
@@ -193,3 +192,13 @@ td:not(:first-child){font-variant-numeric:tabular-nums}
   .ord .side{display:flex;position:sticky;top:70px}
   .subbar,.foot{padding-left:22px;padding-right:22px}
 }
+
+/* State switch in the header, and the state tick boxes on the Admin page */
+.states{display:inline-flex;margin:0 auto 0 4px;border:1.5px solid var(--ink);border-radius:6px;overflow:hidden}
+.states button{border:0;background:var(--sheet);padding:6px 12px;font:600 13px/1 var(--body);min-height:30px}
+.states button+button{border-left:1.5px solid var(--ink)}
+.states button[aria-pressed="true"]{background:var(--ink);color:#fff}
+.appbar .r1>.st{margin:0 auto 0 4px}
+.pick{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:2px 16px}
+.pick legend{padding:0;font-size:13.5px;margin-bottom:2px}
+.pick .opt span,.uacts .opt span{flex:none}

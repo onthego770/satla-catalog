@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set section = 'customers' %}
-{% block title %}Customers · Satla Spirits{% endblock %}
+{% block title %}{{ g.states[g.state]['name'] }} customers · Satla Spirits{% endblock %}
 {% block body %}
 <main class="wrap"><div class="pad">
   <div id="view" class="col"><p class="meta">Loading customers…</p></div>

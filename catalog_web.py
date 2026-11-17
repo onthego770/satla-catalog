@@ -836,15 +836,28 @@ def admin_source_image():
     return Response(data, mimetype=kind, headers={"Cache-Control": "private, max-age=300"})
 
 
-@app.route("/admin/items")
+@app.route("/admin/items", methods=["GET", "POST"])
 @admin_required
 def admin_items():
     """What can be added: the items of the current state's inventory that have
-    no catalog entry."""
+    no catalog entry, less those an admin hid (a Hide button on each row, and
+    "Show again" under the list). Hiding changes this list only."""
     if g.state is None:
         abort(404)
     rows = sorted(db.uncataloged(g.db, g.state), key=lambda r: (r["name"] or "").casefold())
-    return render_template("items.html", rows=rows, state_name=_state_name(g.state),
+    if request.method == "POST":
+        sku = request.form.get("sku") or ""
+        row = next((r for r in rows if r["sku"] == sku), None)
+        if row is None:
+            abort(400)
+        hide = request.form.get("action") == "hide"
+        db.hide_item(g.db, sku, g.user["name"], hidden=hide)
+        _note(f"{row['name']} ({sku}) " + ("is hidden from this list." if hide else "is back on this list."))
+        return redirect(url_for("admin_items"))
+    hidden = db.hidden_items(g.db)
+    return render_template("items.html", rows=[r for r in rows if r["sku"] not in hidden],
+                           hidden=[r for r in rows if r["sku"] in hidden],
+                           state_name=_state_name(g.state),
                            inventory_name=g.states[g.state]["inventory"], note=_note())
 
 

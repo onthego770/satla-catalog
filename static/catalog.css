@@ -229,3 +229,7 @@ a.btn{text-decoration:none}
 #sourcebox{display:grid;gap:8px}
 #sourcebox textarea{width:100%}
 #sourcebox .field .meta{font-weight:400}
+
+/* Admin > Add items: a row with its Hide / Show again button beside it */
+.rowline{display:flex;gap:8px;align-items:center}
+.rowline .rowbtn{flex:1;min-width:0}

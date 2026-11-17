@@ -142,6 +142,11 @@ CREATE TABLE IF NOT EXISTS qbo_last_prices (
     txn_date    TEXT NOT NULL,      -- YYYY-MM-DD of that invoice
     PRIMARY KEY (company, customer_id, sku)
 );
+CREATE TABLE IF NOT EXISTS hidden_items (
+    sku       TEXT PRIMARY KEY,   -- an inventory item kept off Admin > Add items (both states)
+    hidden_at TEXT NOT NULL,
+    hidden_by TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS live_snapshot (
     source       TEXT PRIMARY KEY,
     attempted_at TEXT,
@@ -342,6 +347,24 @@ def state_products(con, state):
     for p in out:
         p["mevushal"] = mevushal(p["name"], p["mevushal"])
     return sorted(out, key=lambda r: ((r["brand"] or "") + (r["name"] or "")).casefold())
+
+
+def hidden_items(con):
+    """{sku: row} of the inventory items an admin took off Admin > Add items
+    (the owner, 2026-11-17: "Please remove these from the Admin / Add Items
+    list for IL and FL"). They stay in the inventory systems; only that list
+    leaves them out."""
+    return {r["sku"]: dict(r) for r in con.execute("SELECT * FROM hidden_items")}
+
+
+def hide_item(con, sku, user_name, hidden=True):
+    """Take an item off Admin > Add items (hidden=True) or put it back."""
+    with con:
+        if hidden:
+            con.execute("INSERT OR REPLACE INTO hidden_items (sku, hidden_at, hidden_by) VALUES (?,?,?)",
+                        (sku, now_utc(), user_name))
+        else:
+            con.execute("DELETE FROM hidden_items WHERE sku = ?", (sku,))
 
 
 def uncataloged(con, state):

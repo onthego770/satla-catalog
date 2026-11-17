@@ -9,14 +9,29 @@
   <p class="meta">{{ rows|length }} {{ 'item' if rows|length == 1 else 'items' }} in {{ inventory_name }} with no catalog entry. Press one to add it to the catalog. To see the other state's list, use the state switch at the top. To edit an item that is already in the catalog, open its page and press Edit.</p>
   <div class="list">
     {% for r in rows %}
-    <a class="rowbtn" href="{{ url_for('admin_item', sku=r['sku']) }}">
-      <b>{{ r['name'] }}</b>
-      <span class="meta">{{ r['sku'] }}{% if r['size'] %} · {{ r['size'] }}{% endif %}{% if r['bottles_per_case'] %} · {{ '%g'|format(r['bottles_per_case']) }} per case{% endif %}</span>
-      <span class="end"><span class="btn sm">Add</span></span>
-    </a>
+    <div class="rowline">
+      <a class="rowbtn" href="{{ url_for('admin_item', sku=r['sku']) }}">
+        <b>{{ r['name'] }}</b>
+        <span class="meta">{{ r['sku'] }}{% if r['size'] %} · {{ r['size'] }}{% endif %}{% if r['bottles_per_case'] %} · {{ '%g'|format(r['bottles_per_case']) }} per case{% endif %}</span>
+        <span class="end"><span class="btn sm">Add</span></span>
+      </a>
+      <form method="post"><input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="sku" value="{{ r['sku'] }}"><input type="hidden" name="action" value="hide"><button class="btn sm" type="submit" aria-label="Hide {{ r['name'] }} from this list">Hide</button></form>
+    </div>
     {% else %}
     <div class="empty">Every item in {{ inventory_name }} has a catalog entry.</div>
     {% endfor %}
   </div>
+  {% if hidden %}
+  <h3 class="title">Hidden: {{ hidden|length }}</h3>
+  <p class="meta">Kept off the list above. They are still in {{ inventory_name }}; hiding changes this list only.</p>
+  <div class="list">
+    {% for r in hidden %}
+    <div class="rowline">
+      <div class="rowbtn"><b>{{ r['name'] }}</b><span class="meta">{{ r['sku'] }}{% if r['size'] %} · {{ r['size'] }}{% endif %}</span></div>
+      <form method="post"><input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="sku" value="{{ r['sku'] }}"><input type="hidden" name="action" value="show"><button class="btn sm" type="submit">Show again</button></form>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div></main>
 {% endblock %}

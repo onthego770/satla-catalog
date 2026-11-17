@@ -17,7 +17,7 @@ This directory is where the site for catalog.satlaspirits.com gets built. Stages
 - No new packages: it runs on the existing `qbo311` environment. Do not `pip install` into it.
 
 ## Before anything else
-Session handoffs are dated files, `docs/HANDOFF-YYYY-MM-DD.md`. When the owner says "read today's handoff" (or "the latest handoff"), read the one with the newest date first (a letter after the date marks a later handoff of the same day); the newest is `docs/HANDOFF-2026-11-17.md`. When you write a new one at the end of a session, name it the same way and update this line.
+Session handoffs are dated files, `docs/HANDOFF-YYYY-MM-DD.md`. When the owner says "read today's handoff" (or "the latest handoff"), read the one with the newest date first (a letter after the date marks a later handoff of the same day); the newest is `docs/HANDOFF-2026-11-17b.md`. When you write a new one at the end of a session, name it the same way and update this line.
 
 Read `docs/HANDOFF.md` in full. It holds everything the owner and the design Claude agreed: where data lives, what is in this directory, what is missing and where it is, every screen and rule, which decisions are settled and which are open, and how to work with the owner. Then read the three specs it points to and open `wireframes/index.html`.
 

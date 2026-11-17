@@ -18,7 +18,7 @@
   const bySku = Object.fromEntries(P.map(p => [p.sku, p]));
   const view = document.getElementById("view"), ovl = document.getElementById("overlay");
   const KEY = "satla.order.v1." + INFO.co + "." + INFO.id;
-  const CATS = [["all", "All"], ["Wine", "Wine"], ["Spirits", "Spirits"], ["Liqueur & Aperitif", "Liqueurs & Aperitifs"], ["Sake", "Sake"], ["Ready-to-Drink", "Ready-to-Drink"]];
+  const CATS = [["all", "All"], ["Wine", "Wine"], ["Spirits", "Spirits"], ["Liqueur & Aperitif", "Liqueurs & Aperitifs"], ["Sake", "Sake"], ["Ready-to-Drink", "Ready-to-Drink"], ["Beer", "Beer"]];
   const SHOW = 40;
   const sid = s => String(s).replace(/[^a-zA-Z0-9]+/g, "_");
   const r2 = n => Math.round(n * 100) / 100;

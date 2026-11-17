@@ -19,7 +19,7 @@
   P.sort((a, b) => norm(a.brand + a.name).localeCompare(norm(b.brand + b.name)));
 
   /* ---------- menu and filters (agreed 2026-10-29) ---------- */
-  const MENU = [["all", "All"], ["wine", "Wine"], ["spirits", "Spirits"], ["liq", "Liqueurs & Aperitifs"], ["sake", "Sake"], ["rtd", "Ready-to-Drink"], ["brands", "Brands (A–Z)"], ["countries", "Countries"], ["mev", "Mevushal"], ["kfp", "Kosher for Passover"], ["new", "New Arrivals"]];
+  const MENU = [["all", "All"], ["wine", "Wine"], ["spirits", "Spirits"], ["liq", "Liqueurs & Aperitifs"], ["sake", "Sake"], ["rtd", "Ready-to-Drink"], ["beer", "Beer"], ["brands", "Brands (A–Z)"], ["countries", "Countries"], ["mev", "Mevushal"], ["kfp", "Kosher for Passover"], ["new", "New Arrivals"]];
   /* Items the state sells that have no catalog entry yet (marked x by the server). */
   if (P.some(p => p.x)) MENU.push(["nocat", "Not in catalog"]);
   const SUB = {wine: ["Red", "White", "Rosé", "Sparkling", "Orange", "Dessert & Fortified"], spirits: ["Tequila", "Whiskey", "Gin", "Vodka", "Brandy & Cognac"]};
@@ -60,6 +60,7 @@
       case "liq": return p.cat === "Liqueur & Aperitif";
       case "sake": return p.cat === "Sake";
       case "rtd": return p.cat === "Ready-to-Drink";
+      case "beer": return p.cat === "Beer";
       case "mev": return p.mev === "Yes";
       case "kfp": return p.kfp === "Yes";
       case "nocat": return !!p.x;

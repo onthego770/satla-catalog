@@ -25,6 +25,9 @@ export-products  Rewrite Satla_Master_Catalog.csv from Catalog.db. The site does
 load-pack      Fill bottles per case and ml from QuickBooks and MMK (read-only).
 refresh        Read regular prices and on hand from QuickBooks and MMK (read-only)
                into the snapshot the pages show. A timer runs this every 30 minutes.
+               Once a day it also reads the product lists of Kosher Wine World and
+               Kosher Wine Direct, for the edit form's Find button.
+store-list     Read the product lists of Kosher Wine World and Kosher Wine Direct now.
 set-admin      Give (on) or take away (off) a login's admin rights: the Admin page.
 order-email    Switch the sending of New Order emails on or off. While it is off,
                Send order shows the email it would send and sends nothing. The
@@ -111,9 +114,43 @@ def cmd_load_pack(args):
         print("unknown:", ", ".join(missing))
 
 
+STORE_LIST_HOURS = 24
+
+
+def _store_list(force=False):
+    """Keep a copy of the product lists of Kosher Wine World and Kosher Wine
+    Direct in Catalog.db, for the edit form's Find button. Each is read again
+    once it is STORE_LIST_HOURS old; a failed read keeps the last good list."""
+    from datetime import datetime, timedelta, timezone
+    import catalog_source as source
+    con = db.connect()
+    for snap_source, label, read in (
+            (db.STORE_SOURCE, "Kosher Wine World", lambda: source.listing(source.password(CONFIG_PATH))),
+            (db.KWD_SOURCE, "Kosher Wine Direct", source.listing_kwd)):
+        last = db.snapshot(con, snap_source)["attempted_at"]
+        if last and not force:
+            age = datetime.now(timezone.utc) - datetime.strptime(
+                last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if age < timedelta(hours=STORE_LIST_HOURS):
+                continue
+        try:
+            products = read()
+            db.save_snapshot(con, snap_source, products)
+            print(f"{label} product list: {len(products)} products")
+        except source.SourceError as e:
+            db.save_snapshot(con, snap_source, error=e)
+            print(f"{label} product list not read: {e}")
+    con.close()
+
+
 def cmd_refresh(_args):
     import catalog_live
     catalog_live.refresh()
+    _store_list()
+
+
+def cmd_store_list(_args):
+    _store_list(force=True)
 
 
 def _ask_password():
@@ -219,6 +256,7 @@ def main():
     lp.add_argument("--overwrite", action="store_true", help="replace values already filled")
     lp.set_defaults(func=cmd_load_pack)
     sub.add_parser("refresh").set_defaults(func=cmd_refresh)
+    sub.add_parser("store-list").set_defaults(func=cmd_store_list)
     au = sub.add_parser("add-user")
     au.add_argument("name")
     au.add_argument("email")

@@ -27,6 +27,7 @@ import time
 import unicodedata
 
 import catalog_db as db
+from catalog_source import plain
 
 PHOTO_DIR = db.ROOT / "photos"
 CSV_PATH = db.ROOT / "Satla_Master_Catalog.csv"
@@ -142,9 +143,6 @@ def brand_for(con, names, tags=()):
     of the page's `tags` that names a winery and that a name begins with
     ("ramat negev wines" + "Ramat Negev Red Exodus" -> "Ramat Negev")."""
     names = [" ".join((n or "").split()) for n in names if n]
-    def plain(text):                      # accents and capitals do not count: "CHATEAU" = "Château"
-        return "".join(c for c in unicodedata.normalize("NFD", text)
-                       if not unicodedata.combining(c)).casefold()
     def begins(name, start):
         return plain(name).startswith(plain(start)) and (
             len(name) == len(start) or not name[len(start)].isalnum())
@@ -157,6 +155,61 @@ def brand_for(con, names, tags=()):
         for n in names:
             if len(start) >= 3 and begins(n, start):
                 return n[:len(start)]                    # as the name writes it
+    # A brand whose name is longer than what the product names carry ("Crater
+    # Lake Spirits" for "Crater Lake Vodka"): the brand of the catalog products
+    # whose names begin with the same two words or more.
+    best, brands = 1, []
+    for row in con.execute("SELECT name, brand FROM products WHERE brand <> ''"):
+        theirs = plain(row["name"]).split()
+        for n in names:
+            mine = plain(n).split()
+            same = next((i for i, (a, b) in enumerate(zip(mine, theirs)) if a != b),
+                        min(len(mine), len(theirs)))
+            if same > best:
+                best, brands = same, []
+            if same == best and same > 1:
+                brands.append(row["brand"])
+    return max(set(brands), key=brands.count) if brands else ""
+
+
+# A word in a product's name that tells its menu type, for a page with no type
+# field (a store's spirits pages give only ABV and size). Used only for a type
+# the catalog already has.
+_KIND_WORDS = {"vodka": "Vodka", "gin": "Gin", "tequila": "Tequila", "mezcal": "Tequila",
+               "whiskey": "Whiskey", "whisky": "Whiskey", "bourbon": "Whiskey",
+               "scotch": "Whiskey", "cognac": "Brandy & Cognac", "brandy": "Brandy & Cognac",
+               "armagnac": "Brandy & Cognac", "liqueur": "Liqueur", "sake": "Sake",
+               "lager": "Lager"}
+
+
+def kind_for(con, name):
+    """(category, type) that a product's name states ("Crater Lake Vodka" ->
+    ("Spirits", "Vodka")), or ('', ''). Only a type some catalog product already
+    has, with the category that type is filed under."""
+    for word in re.findall(r"\w+", plain(name)):
+        kind = _KIND_WORDS.get(word)
+        row = kind and con.execute("SELECT category FROM products WHERE type = ? GROUP BY category "
+                                   "ORDER BY COUNT(*) DESC LIMIT 1", (kind,)).fetchone()
+        if row:
+            return row["category"], kind
+    return "", ""
+
+
+def brand_country(con, brand):
+    """The country of a brand's catalog products when they all agree, else ''."""
+    found = {r["country"] for r in con.execute(
+        "SELECT DISTINCT country FROM products WHERE brand = ? AND country <> ''", (brand,))}
+    return found.pop() if len(found) == 1 else ""
+
+
+def grape_for(con, name):
+    """The grape a product's name states, or '': the longest grape already in the
+    catalog that appears in `name` as whole words ("Adir Winemaker Edition
+    Petite Sirah 2023" -> "Petite Sirah"). For a page that has no grape field."""
+    padded = " " + " ".join(re.findall(r"\w+", plain(name))) + " "
+    for grape in sorted(suggestions(con)["grape"], key=len, reverse=True):
+        if " " + " ".join(re.findall(r"\w+", plain(grape))) + " " in padded:
+            return grape
     return ""
 
 

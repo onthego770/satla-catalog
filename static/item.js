@@ -161,49 +161,54 @@
     if (remove.checked && out.grid.files.length) { pick.value = ""; clear(); say("The new picture was dropped. The photo will be removed when you press Save."); }
   });
 
-  /* --- Fill from Kosher Wine World --- */
+  /* --- Fill from a retailer's page: Kosher Wine World (found by the Find
+     button or by its address) or a pasted KosherWine.com page --- */
   const src = document.getElementById("sourcebox");
   if (!src) return;
   const url = document.getElementById("source-url"), go = document.getElementById("source-go");
   const smsg = document.getElementById("source-msg"), acts = document.getElementById("source-acts");
   const tell = (text, bad) => { smsg.textContent = text; smsg.classList.toggle("open", !!bad); };
   const field = name => document.getElementById("f-" + name);
-  /* What the store can give, in the order the form shows it: [field, what to call it]. */
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  };
+  /* What a page can give, in the order the form shows it: [field, what to call it]. */
   const THEIRS = [["brand", "brand"], ["category", "category"], ["type", "type"], ["sweetness", "sweetness"], ["grape", "grape"], ["country", "country"], ["region", "region"],
     ["abv", "ABV"], ["vintage", "vintage"], ["size", "bottle size"], ["mevushal", "Mevushal"], ["kfp", "Kosher for Passover"], ["organic", "Organic"], ["certifier", "certifier"], ["description", "description"]];
   const button = (label, fn) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "btn sm"; b.textContent = label;
+    const b = el("button", "btn sm", label);
+    b.type = "button";
     b.addEventListener("click", async () => { b.disabled = true; await fn(); b.remove(); });
     acts.appendChild(b);
   };
+  /* Ask this site (never the retailer directly); the answer as an object, or an
+     Error whose message can be shown. */
+  async function ask(address, params) {
+    let r, d;
+    try {
+      r = await fetch(address, {method: "POST", body: new URLSearchParams(Object.assign({csrf: src.dataset.csrf}, params)), credentials: "same-origin"});
+      d = await r.json();
+    } catch (e) { throw new Error(r && r.status === 413 ? "That paste is too large. Paste one product page only." : ""); }
+    if (!r.ok) throw new Error(d.error || "");
+    return d;
+  }
   async function theirPhoto(address) {
     try {
       const r = await fetch(address, {credentials: "same-origin"});
       if (!r.ok) throw new Error();
       pick.value = "";
       return await usePicture(await r.blob());
-    } catch (e) { say("The picture could not be fetched from Kosher Wine World.", true); return false; }
+    } catch (e) { say("The picture could not be fetched. Save it from your browser and choose it here instead.", true); return false; }
   }
-  async function fill() {
-    const address = url.value.trim();
-    if (!address) return tell("Paste the address of the product's page first.", true);
-    go.disabled = true; acts.textContent = ""; tell("Reading the page…");
-    let d;
-    try {
-      const body = new URLSearchParams({csrf: src.dataset.csrf, url: address, name: field("name").value});
-      const r = await fetch(src.dataset.url, {method: "POST", body, credentials: "same-origin"});
-      d = await r.json();
-      if (!r.ok) throw new Error(d.error || "");
-    } catch (e) {
-      go.disabled = false;
-      return tell(e.message || "The page could not be read. Check the address and try again.", true);
-    }
-    go.disabled = false;
+  /* Put what a page gave into the form. A blank field is filled; a field that
+     already holds something else gets a button that shows their value. Their
+     SKU is shown, never checked: a store often files a product under another
+     number. */
+  async function put(d) {
     const done = [];
-    /* A blank field is filled; a field that already holds something else gets a
-       button that shows their value. The store's SKU is shown, never checked:
-       the store often files a product under a different SKU of the same wine. */
     for (const [name, label] of THEIRS) {
       const f = field(name), theirs = d[name];
       if (!theirs || f.value.trim() === theirs) continue;
@@ -218,11 +223,82 @@
     let text = "Found: " + d.name + (d.sku ? " (their SKU " + d.sku + ")" : "") + ". ";
     text += done.length ? "Filled in: " + done.join(", ") + ". " : "Nothing was blank to fill in. ";
     const missing = [d.description ? "" : "description", d.image ? "" : "picture"].filter(Boolean);
-    if (missing.length) text += "Their page has no " + missing.join(" or ") + ". ";
+    if (missing.length) text += "No " + missing.join(" or ") + " came with it. ";
+    const blank = THEIRS.filter(([name]) => !field(name).value.trim() && name !== "vintage").map(([, label]) => label);
+    if (blank.length) text += "Their page does not give: " + blank.join(", ") + ". ";
     if (acts.children.length) text += "The buttons below put their value in place of yours. ";
     text += "Check it, then press the button at the bottom to save.";
     tell(text, false);
   }
-  go.addEventListener("click", fill);
-  url.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fill(); } });
+  async function fill(address, params, busy, fallback) {
+    busy.disabled = true; acts.textContent = ""; tell("Reading the page…");
+    try { await put(await ask(address, Object.assign({name: field("name").value}, params))); }
+    catch (e) { tell(e.message || fallback, true); }
+    busy.disabled = false;
+  }
+  const fetchPage = () => {
+    const address = url.value.trim();
+    if (!address) return tell("Paste the address of the product's page first.", true);
+    return fill(src.dataset.url, {url: address}, go, "The page could not be read. Check the address and try again.");
+  };
+  go.addEventListener("click", fetchPage);
+  url.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fetchPage(); } });
+
+  const pasteGo = document.getElementById("paste-go"), pasteText = document.getElementById("paste-text");
+  if (pasteGo) pasteGo.addEventListener("click", () => {
+    if (!pasteText.value.trim()) return tell("Paste a product page into the box first.", true);
+    fill(src.dataset.paste, {text: pasteText.value}, pasteGo, "The paste could not be read. Try again.");
+  });
+
+  /* --- Find: the closest matches on Kosher Wine World, best first --- */
+  const findGo = document.getElementById("find-go");
+  if (!findGo) return;
+  const fsku = document.getElementById("find-sku"), fname = document.getElementById("find-name");
+  const fmsg = document.getElementById("find-msg"), fout = document.getElementById("find-out"), fkw = document.getElementById("find-kw");
+  const note = (text, bad) => { fmsg.textContent = text; fmsg.classList.toggle("open", !!bad); };
+  function match(m, place) {
+    const row = el("div", "frow");
+    const pic = el("a", "fpic");
+    if (m.image) {
+      pic.href = m.image; pic.target = "_blank"; pic.rel = "noopener"; pic.title = "Open the picture to read the label";
+      const im = el("img"); im.src = m.thumb; im.alt = ""; im.loading = "lazy";
+      pic.appendChild(im);
+    }
+    row.appendChild(pic);
+    const body = el("div", "fbody");
+    body.appendChild(el("strong", "", place + ". " + m.name));
+    body.appendChild(el("span", "meta", (m.store || "Kosher Wine World") + " · " + m.why + " · " + (m.skus.length ? "their item number " + m.skus.join(", ") : "no item number on their page")));
+    if (m.other) body.appendChild(el("span", "meta warn", m.other));
+    const btns = el("div", "uacts");
+    const use = el("button", "btn sm", "Use this"); use.type = "button";
+    use.addEventListener("click", () => { url.value = m.url; fetchPage(); smsg.scrollIntoView({block: "nearest"}); });
+    const open = el("a", "link", "Open their page"); open.href = m.url; open.target = "_blank"; open.rel = "noopener";
+    btns.append(use, open);
+    body.appendChild(btns);
+    row.appendChild(body);
+    return row;
+  }
+  async function find() {
+    if (!fsku.value.trim() && !fname.value.trim()) return note("Type an item number or a wine name first.", true);
+    findGo.disabled = true; fout.textContent = ""; fkw.hidden = true; note("Looking…");
+    let d;
+    try { d = await ask(src.dataset.find, {sku: fsku.value, name: fname.value, item: src.dataset.sku}); }
+    catch (e) { findGo.disabled = false; return note(e.message || "The search did not work. Try again.", true); }
+    findGo.disabled = false;
+    d.matches.forEach((m, i) => fout.appendChild(match(m, i + 1)));
+    const stores = Object.keys(d.listed), unread = stores.filter(s => !d.listed[s]);
+    const total = stores.reduce((n, s) => n + d.listed[s], 0);
+    note((d.matches.length ? d.matches.length + (d.matches.length === 1 ? " match" : " matches, best first") + " on " + stores.join(" and ") + ". Open a picture to read its label before you use it."
+        : "No match found among the " + total + " products of " + stores.join(" and ") + ".")
+      + (unread.length ? " Not read yet: " + unread.join(", ") + " (read with the next refresh, within half an hour)." : ""), !total);
+    if (d.kw_search) {
+      fkw.textContent = "KosherWine.com cannot be searched from here. ";
+      const a = el("a", "link", "Search KosherWine.com for “" + d.words + "”");
+      a.href = d.kw_search; a.target = "_blank"; a.rel = "noopener";
+      fkw.append(a, " (opens in a new tab). Open the right product there, copy the page, and paste it into the box below.");
+      fkw.hidden = false;
+    }
+  }
+  findGo.addEventListener("click", find);
+  for (const f of [fsku, fname]) f.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); find(); } });
 })();

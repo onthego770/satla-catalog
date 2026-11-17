@@ -376,6 +376,10 @@ def states(con):
     return snapshot(con, STATES_SOURCE)["data"] or {}
 
 
+STORE_SOURCE = "kww_products"          # the Kosher Wine World product list (catalog_source.listing)
+KWD_SOURCE = "kwd_products"            # the Kosher Wine Direct product list (catalog_source.listing_kwd)
+
+
 def save_snapshot(con, source, payload=None, error=None):
     """Record one read attempt. A failed read keeps the last good figures and
     their time, and stores why it failed, so a page can say "as of ..." honestly

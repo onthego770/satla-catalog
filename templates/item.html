@@ -7,13 +7,27 @@
   <h2 class="title">{{ 'Add to catalog' if adding else 'Edit item' }} <span class="st">{{ p['sku'] }}</span></h2>
   {% if adding %}<p class="meta">This item has no catalog entry yet. The name, bottle size and bottles per case below are what the inventory system holds; change them as you like, fill in the rest, and press Save.</p>{% endif %}
   {% for problem in problems %}<p class="alert" role="alert">{{ problem }}</p>{% endfor %}
-  <div class="box" id="sourcebox" data-url="{{ url_for('admin_source') }}" data-csrf="{{ form_token() }}" data-sku="{{ p['sku'] }}">
-    <h3>Fill from Kosher Wine World</h3>
+  <div class="box" id="sourcebox" data-url="{{ url_for('admin_source') }}" data-find="{{ url_for('admin_source_find') }}" data-paste="{{ url_for('admin_source_paste') }}" data-csrf="{{ form_token() }}" data-sku="{{ p['sku'] }}">
+    <h3>Find this item on Kosher Wine World, Kosher Wine Direct and KosherWine.com</h3>
+    <div class="fgrid">
+      <label class="field" for="find-sku">Item number<input class="inp" id="find-sku" value="{{ p['sku'] }}" autocomplete="off"></label>
+      <label class="field" for="find-name">Wine name<input class="inp" id="find-name" value="{{ p['name'] or '' }}" maxlength="200" autocomplete="off"></label>
+    </div>
+    <div class="srow"><button class="btn" type="button" id="find-go">Find</button></div>
+    <p class="meta" id="find-msg" role="status">Either one is enough. Find lists the closest matches on Kosher Wine World and Kosher Wine Direct, best first, and gives the same search on KosherWine.com to open in your browser.</p>
+    <div class="found" id="find-out"></div>
+    <p class="meta" id="find-kw" hidden></p>
+    <label class="field" for="source-url">Or the address of a Kosher Wine World or Kosher Wine Direct product page</label>
     <div class="srow">
-      <input class="inp" id="source-url" type="url" inputmode="url" placeholder="https://kosherwineworld.com/products/…" aria-label="Address of the product page on kosherwineworld.com" autocomplete="off">
+      <input class="inp" id="source-url" type="url" inputmode="url" placeholder="https://kosherwineworld.com/products/… or https://kosherwinedirect.com/products/…" autocomplete="off">
       <button class="btn" type="button" id="source-go">Fetch</button>
     </div>
-    <p class="meta" id="source-msg" role="status">Paste the address of this product's page on kosherwineworld.com and press Fetch. Blank fields are filled in from it (details, description, photo); where you already have a value you get a button instead. Nothing is saved until you press {{ 'Add to catalog' if adding else 'Save' }}.</p>
+    <label class="field" for="paste-text">Or a product page from KosherWine.com or any other site, pasted
+      <textarea class="inp" id="paste-text" rows="3" placeholder="Open the product's page in your browser, select all (Ctrl+A), copy (Ctrl+C), and paste here (Ctrl+V)."></textarea>
+      <span class="meta">The pasted text gives the details and the description. For the photo too, add the picture's address on a line of its own (right-click the picture, Copy image address), or paste the page's source instead (Ctrl+U, then select all and copy).</span>
+    </label>
+    <div class="srow"><button class="btn" type="button" id="paste-go">Fill from the paste</button></div>
+    <p class="meta" id="source-msg" role="status">Blank fields are filled in from the page you choose (details, description, photo); where you already have a value you get a button instead. Nothing is saved until you press {{ 'Add to catalog' if adding else 'Save' }}.</p>
     <div class="uacts" id="source-acts"></div>
   </div>
   <div class="cust">

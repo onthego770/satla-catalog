@@ -216,3 +216,16 @@ select.inp{appearance:auto}
   .fgrid .wide{grid-column:1/-1}
 }
 a.btn{text-decoration:none}
+
+/* the edit form's Find results: one retailer match per row */
+.found{display:grid;gap:8px}
+.found:empty{display:none}
+.frow{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:start;border:1px solid var(--line,#ddd);border-radius:6px;padding:8px}
+.fpic{display:block;width:64px;height:84px;background:#fff;border-radius:4px;overflow:hidden}
+.fpic img{width:100%;height:100%;object-fit:contain;display:block}
+.fbody{display:grid;gap:3px;min-width:0}
+.fbody strong{font-size:14px;overflow-wrap:anywhere}
+.meta.warn{color:var(--stop);font-weight:600}
+#sourcebox{display:grid;gap:8px}
+#sourcebox textarea{width:100%}
+#sourcebox .field .meta{font-weight:400}

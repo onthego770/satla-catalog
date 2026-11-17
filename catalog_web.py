@@ -40,6 +40,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import catalog_db as db
 import catalog_items as items
 import catalog_source as source
+from urllib.parse import quote_plus
 
 CONFIG_PATH = db.ROOT.parent / "config" / "catalog_config.json"
 PHOTO_DIR = db.ROOT / "photos"
@@ -735,10 +736,27 @@ def admin_item(sku):
 
 def _store_password():
     """The Kosher Wine World storefront password, from the site's private config."""
-    try:
-        return json.loads(CONFIG_PATH.read_text()).get("kww_password") or ""
-    except (OSError, ValueError):
-        return ""
+    return source.password(CONFIG_PATH)
+
+
+def _found(found):
+    """What a retailer's page gave, ready for the edit form: the picture goes
+    through this site, and what the page has no field for is worked out: the
+    brand from the names; the grape, and for spirits the category and type,
+    from the page's product name when the page gave none; the country from
+    the brand's other catalog products when they all agree."""
+    if found["image"]:
+        found["image"] = url_for("admin_source_image", u=found["image"])
+    found["brand"] = items.brand_for(g.db, [found["name"], request.form.get("name")],
+                                     found.pop("tags"))
+    if not found.get("grape"):
+        found["grape"] = items.grape_for(g.db, found["name"])
+    if not found.get("category"):                # a spirits page gives no type at all
+        found["category"], kind = items.kind_for(g.db, found["name"])
+        found["type"] = found.get("type") or kind
+    if not found.get("country") and found["brand"]:
+        found["country"] = items.brand_country(g.db, found["brand"])
+    return jsonify(found)
 
 
 @app.route("/admin/source", methods=["POST"])
@@ -751,13 +769,59 @@ def admin_source():
         found = source.product(request.form.get("url"), _store_password())
     except source.SourceError as e:
         return jsonify(error=str(e)), 400
-    if found["image"]:
-        found["image"] = url_for("admin_source_image", u=found["image"])
-    # The store has no brand field: work it out from the names (theirs, and the
-    # one the form holds now).
-    found["brand"] = items.brand_for(g.db, [found["name"], request.form.get("name")],
-                                     found.pop("tags"))
-    return jsonify(found)
+    return _found(found)
+
+
+@app.route("/admin/source/paste", methods=["POST"])
+@admin_required
+def admin_source_paste():
+    """The edit form's paste box: a product page of KosherWine.com or of any
+    other site, which the admin copied in their own browser and pasted, read
+    into the same JSON as admin_source(). No page is requested from such a
+    site; only the product's picture is fetched."""
+    try:
+        found = source.pasted(request.form.get("text"), request.form.get("name") or "")
+    except source.SourceError as e:
+        return jsonify(error=str(e)), 400
+    return _found(found)
+
+
+@app.route("/admin/source/find", methods=["POST"])
+@admin_required
+def admin_source_find():
+    """The edit form's Find button: the closest matches on Kosher Wine World and
+    Kosher Wine Direct for an item number and / or a wine name, best first, from
+    the copies of those stores' product lists the refresh keeps; and the address
+    of the same search on KosherWine.com, for the admin to open in their own
+    browser."""
+    sku = " ".join((request.form.get("sku") or "").split())
+    name = " ".join((request.form.get("name") or "").split())[:200]
+    item = request.form.get("item") or ""
+    if not sku and not name:
+        return jsonify(error="Type an item number or a wine name first."), 400
+    snaps = {label: db.snapshot(g.db, src) for label, src in
+             (("Kosher Wine World", db.STORE_SOURCE), ("Kosher Wine Direct", db.KWD_SOURCE))}
+    matches = source.rank([dict(p, store=p.get("store") or label)
+                           for label, snap in snaps.items() for p in snap["data"] or []],
+                          sku, name, limit=8)
+    for m in matches:
+        if m["image"]:
+            m["thumb"] = m["image"] + ("&" if "?" in m["image"] else "?") + "width=160"
+        # Their page filed under a DIFFERENT item's number: say which item that is here.
+        others = [s for s in m["skus"] if s.upper() != item.upper()]
+        if item and len(others) == len(m["skus"]):
+            for s in others:
+                row = db.product(g.db, s) or items.inventory_item(g.db, s)
+                if row:
+                    m["other"] = (f"Careful: their page is filed under item number {s}, "
+                                  f"which here is {row['name']}.")
+                    break
+    said = " ".join(source.words(name))
+    return jsonify(matches=matches, words=said,
+                   listed={label: len(snap["data"] or []) for label, snap in snaps.items()},
+                   as_of={label: (_when(snap["fetched_at"]) or {}).get("text", "")
+                          for label, snap in snaps.items()},
+                   kw_search=source.KW_SEARCH + quote_plus(said) if said else "")
 
 
 @app.route("/admin/source/image")

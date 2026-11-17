@@ -158,7 +158,8 @@ def refresh(log=print):
     catalog_skus = db.skus(con)
     db.save_snapshot(con, db.STATES_SOURCE, payload={
         code: {"name": info["name"], "inventory": info["inventory_name"],
-               "catalog_all": bool(info.get("catalog_all"))}
+               "catalog_all": bool(info.get("catalog_all")),
+               "order_email": info.get("order_email") or ""}
         for code, info in mc.STATES.items()})
     results = {}
 

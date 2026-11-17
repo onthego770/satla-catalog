@@ -1,6 +1,6 @@
 # Satla Catalog — Master Spec (SOURCE OF TRUTH)
 
-Version 0.47 — 2026-11-17 — Draft
+Version 0.48 — 2026-11-17 — Draft
 
 ## How to use this document (for any chat in this Project)
 - This doc is the complete, authoritative record of the Satla catalog / rep ordering system design. It is NOT a summary. Read it before answering anything about the catalog, data model, architecture or requirements.
@@ -245,6 +245,7 @@ Version 0.47 — 2026-11-17 — Draft
 - Then build plan: daily check (MMK, two QBO companies, catalog database), database, order of construction.
 
 ## Change log
+- 2026-11-17 — v0.48 — (VPS working copy.) The `states` snapshot gains `order_email` per state (from the library's `STATES`): where an order for a customer of that state is emailed. No table changed.
 - 2026-11-17 — v0.47 — (VPS working copy.) Catalog.db holds 425 products (Wine 327, Spirits 62, Liqueur & Aperitif 26, Sake 5, Ready-to-Drink 4, Beer 1); 423 have a photo. A product may have NO photo (`I-SR04-R`, `I-SR08-R`: no picture exists; the site shows a blank photo box). `I-AD02R-M` (MMK and QuickBooks Illinois) is a second SKU of the Mevushal Adir Kerem Ben Zimra Cabernet `I-AD01M-R` and carries a copy of its entry. Florida lists 457: 347 catalog products, 110 without an entry; Illinois lists 183.
 - 2026-11-16 — v0.46 — (VPS working copy.) New category value `Beer` (Dovid, 2026-11-16: "Please add beer category"), with a menu entry after Ready-to-Drink; first product `ISR-GOLD001` Goldstar Premium Lager (type Lager). Catalog.db holds 414 products (Wine 318, Spirits 61, Liqueur & Aperitif 25, Sake 5, Ready-to-Drink 4, Beer 1), each with a photo: six Florida items added from his answers (Goldstar, Svayak vodka in three sizes with country Belarus, Casato Sweet Red Cans as Wine, Naviante Barolo). Florida lists 457: 337 catalog products, 120 without an entry. Later the same evening: Almae rosé (France) and Ratzfert (France, Bordeaux, White) added, and Baron Roland VSOP `V-BR04` set to Kosher for Passover: 416 products (Wine 320), Florida 339 catalog products and 118 without an entry.
 - 2026-11-16 — v0.45 — (VPS working copy.) Catalog.db holds 408 products (Wine 316, Spirits 58, Liqueur & Aperitif 25, Sake 5, Ready-to-Drink 4), each with a photo; 228 were added on 2026-11-16 from Kosher Wine World at Dovid's approval, 2 by him. New brands in the data (for example Roland Bru and Baron Roland, two different cognacs). The photo standard gains a rule: the picture is trimmed to the product alone, dropping watermarks, score badges and titles. No schema change since v0.44. See section 0.

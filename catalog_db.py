@@ -367,10 +367,12 @@ def state_product(con, state, sku):
 
 
 def states(con):
-    """{code: {'name', 'inventory', 'catalog_all'}} for every state the last
-    refresh knew, in the library's order. `inventory` names the system that
-    holds that state's inventory ("MMK", "QuickBooks Florida"); `catalog_all`
-    is True for a state whose catalog lists every item of that inventory."""
+    """{code: {'name', 'inventory', 'catalog_all', 'order_email'}} for every
+    state the last refresh knew, in the library's order. `inventory` names the
+    system that holds that state's inventory ("MMK", "QuickBooks Florida");
+    `catalog_all` is True for a state whose catalog lists every item of that
+    inventory; `order_email` is where an order for a customer of that state is
+    emailed ('' = nowhere: the state cannot send orders)."""
     return snapshot(con, STATES_SOURCE)["data"] or {}
 
 

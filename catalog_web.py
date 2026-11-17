@@ -45,7 +45,6 @@ CONFIG_PATH = db.ROOT.parent / "config" / "catalog_config.json"
 PHOTO_DIR = db.ROOT / "photos"
 OFFICE_TZ = ZoneInfo("America/Chicago")
 LIBRARY = db.ROOT.parent / "qbo_scripts"          # the existing API library
-ORDER_TO = "florida@satlaspirits.com"             # the office (decided 2026-11-12)
 MIN_PASSWORD = 8
 
 app = Flask(__name__)
@@ -159,6 +158,13 @@ def _use_state(code):
 
 def _state_name(code):
     return g.states[code]["name"]
+
+
+def _order_to(code):
+    """Where an order for a customer of this state is emailed: the state's
+    `order_email` in the library's STATES (the owner, 2026-11-17: each state's
+    orders go to their own address). '' when the state has none."""
+    return g.states[code].get("order_email") or ""
 
 
 @app.context_processor
@@ -484,7 +490,7 @@ def order(company, cid):
                 "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": ln["qty"]}
                           for ln in json.loads(v["lines"])]}
     info = {"co": company, "id": cid, "name": c["name"], "state": _state_name(company),
-            "to": ORDER_TO, "me": g.user["email"], "copy": copy,
+            "to": _order_to(company), "me": g.user["email"], "copy": copy,
             "back": url_for("customer", company=company, cid=cid),
             "send": url_for("order_send", company=company, cid=cid),
             "nonce": secrets.token_urlsafe(12)}
@@ -542,22 +548,25 @@ def _order_email(c, company, lines, note):
     return subject, body
 
 
-def _send_order_email(subject, body):
-    """Send through the library (mail_send.send_mail). Returns None when sent, or
-    the reason it was not. Sending stays off until the owner switches it on
-    (`manage.py order-email on`): the message goes out from the business mailbox."""
+def _send_order_email(to, subject, body):
+    """Send to `to` through the library (mail_send.send_mail). Returns None when
+    sent, or the reason it was not. Sending stays off until the owner switches
+    it on (`manage.py order-email on`): the message goes out from the business
+    mailbox."""
     try:
         enabled = json.loads(CONFIG_PATH.read_text()).get("order_email") is True
     except (OSError, ValueError):
         enabled = False
     if not enabled:
         return "Sending order emails is not switched on yet."
+    if not to:
+        return "No address is set for this state's orders."
     if str(LIBRARY) not in sys.path:
         sys.path.insert(0, str(LIBRARY))
     import mail_send                               # stdlib only; no QuickBooks, no MMK
     from pipeline_errors import PipelineError
     try:
-        mail_send.send_mail(ORDER_TO, subject, body, cc=g.user["email"],
+        mail_send.send_mail(to, subject, body, cc=g.user["email"],
                             reply_to=g.user["email"], from_name="Satla Catalog orders")
     except PipelineError as e:
         return str(e)
@@ -570,7 +579,7 @@ def order_send(company, cid):
     _use_state(company)
     c = _customer(company, cid)
     back = url_for("order", company=company, cid=cid)
-    ctx = {"c": c, "back": back, "to": ORDER_TO, "cc": g.user["email"],
+    ctx = {"c": c, "back": back, "to": _order_to(company), "cc": g.user["email"],
            "customer_url": url_for("customer", company=company, cid=cid),
            "draft_key": f"satla.order.v1.{company}.{cid}"}
     try:
@@ -582,7 +591,7 @@ def order_send(company, cid):
     if nonce and nonce in session.get("sent", []):
         return render_template("sent.html", sent=False, repeat=True, **ctx)
     subject, body = _order_email(c, company, lines, note)
-    problem = _send_order_email(subject, body)
+    problem = _send_order_email(_order_to(company), subject, body)
     if problem is None and nonce:
         session["sent"] = (session.get("sent", []) + [nonce])[-5:]
     return render_template("sent.html", sent=problem is None, problem=problem,

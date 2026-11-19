@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>{% block title %}Satla Spirits{% endblock %}</title>
+{% block head %}{% endblock %}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ asset('catalog.css') }}">
 </head>
-<body data-state="{{ g.state or '' }}">
+{% set price_list = g.state and g.states[g.state].get('price_list') %}
+<body data-state="{{ g.state or '' }}"{% if price_list %} data-list="1"{% endif %}>
 {% if g.user and not hide_appbar %}
 <header class="appbar">
   <div class="wrap">
@@ -31,7 +33,7 @@
     </div>
     <nav class="tabs" aria-label="Sections">
       <a href="{{ url_for('catalog') }}"{% if section not in ('customers', 'admin') %} aria-current="page"{% endif %}>Catalog</a>
-      <a href="{{ url_for('customers') }}"{% if section == 'customers' %} aria-current="page"{% endif %}>Customers</a>
+      {% if not price_list %}<a href="{{ url_for('customers') }}"{% if section == 'customers' %} aria-current="page"{% endif %}>Customers</a>{% endif %}
       {% if g.user['is_admin'] %}<a href="{{ url_for('admin_users') }}"{% if section == 'admin' %} aria-current="page"{% endif %}>Admin</a>{% endif %}
     </nav>
   </div>

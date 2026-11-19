@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Upload a price list · Satla Spirits{% endblock %}
+{% macro box(name, v, label) %}<input class="inp num" name="{{ name }}" value="{% if v is not none %}{{ '%.2f'|format(v) }}{% endif %}" inputmode="decimal" size="8" maxlength="12" aria-label="{{ label }}">{% endmacro %}
+{% macro money(v) %}{% if v is none %}no price{% else %}${{ '%.2f'|format(v) }}{% endif %}{% endmacro %}
+{% block head %}{% if running %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  <div><a class="link" href="{{ url_for('catalog') }}">‹ Back to the {{ state_name }} list</a></div>
+  <h2 class="title">Upload a new price list: {{ state_name }}</h2>
+  {% if problem %}<p class="meta warn" role="alert">{{ problem }}</p>{% endif %}
+
+  {% if running %}
+  <p class="okbox" role="status">Loading the list… New items are getting their entries and photos. This can take a couple of minutes; this page checks by itself every few seconds. You can leave it: the loading goes on.</p>
+
+  {% elif done %}
+  <p class="okbox" role="status">Loaded. {{ done }}.</p>
+  <p class="meta">Every change is in Admin › Item history, where each can be undone. The PDF was kept on the server.</p>
+  <div><a class="btn pri" href="{{ url_for('catalog') }}">See the {{ state_name }} list</a></div>
+
+  {% elif seen %}
+  <form class="box" method="post" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="action" value="load"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="file_name" value="{{ file_name }}">
+    <h3>What this file would change</h3>
+    <p><b>{{ file_name }}</b> reads as the <b>{{ seen['list'] }}</b> list: {{ seen['count'] }} items. Nothing has been changed yet. Look it over, then press Load this list at the bottom.</p>
+    {% if not seen['new'] %}<p class="meta">This list has no new items.</p>{% endif %}
+
+    {% if seen['new'] %}
+    <h3>New items: {{ seen['new']|length }}</h3>
+    <p class="meta">Each ticked item gets a catalog entry, with the list's picture as its photo when it has one. Untick an item to leave it out (the next list will offer it again). The Price box holds the list's price; type over it to set your own.{% if seen['cards'] %} This supplier's list prints no sections: the Section boxes hold a suggestion, and you can type over each (an existing section, or a new one).{% endif %}</p>
+    <datalist id="sections">{% for sec in seen['sections'] %}<option value="{{ sec }}">{% endfor %}</datalist>
+    <div class="tw"><table class="sheet"><thead><tr><th>Add</th><th>SKU</th><th>Description</th><th>Specs</th><th>Section</th><th class="num">Price</th></tr></thead><tbody>
+      {% for r in seen['new'] %}
+      <tr><td><input type="checkbox" name="add" value="{{ r['sku'] }}" checked aria-label="Add {{ r['name'] }}"></td>
+        <td class="mono">{{ r['sku'] }}</td><td>{{ r['name'] }}{% if not r['picture'] %} <span class="meta">(no picture)</span>{% endif %}</td><td>{{ r['specs'] }}</td>
+        <td>{% if r['section'] %}{{ r['section'] }}{% else %}<input class="inp" name="section-{{ loop.index0 }}" value="{{ r['suggest'] }}" list="sections" maxlength="60" size="16" aria-label="Section of {{ r['name'] }}">{% endif %}</td>
+        <td class="num">{{ box('newprice-%d' % loop.index0, r['price'], 'Price of ' ~ r['name']) }}</td></tr>
+      {% endfor %}
+    </tbody></table></div>
+    {% endif %}
+
+    {% set quiet = [] %}
+    {% if seen['prices'] %}{% set _ = quiet.append('%d get the new list\'s price' % seen['prices']|length) %}{% endif %}
+    {% if seen['details'] %}{% set _ = quiet.append('%d follow a change the supplier made to the description or specs' % seen['details']|length) %}{% endif %}
+    {% if seen['photos'] %}{% set _ = quiet.append('%d with no photo get the list\'s picture' % seen['photos']|length) %}{% endif %}
+    {% if seen['gone'] %}{% set _ = quiet.append('%d no longer on the list leave the page' % seen['gone']|length) %}{% endif %}
+    {% if quiet %}<p class="meta">Of the items already here: {{ quiet|join('; ') }}. Prices typed on the site stay.</p>{% endif %}
+
+    <div class="srow"><button class="btn pri" type="submit">Load this list</button> <a class="btn" href="{{ url_for('admin_price_list') }}">Cancel</a></div>
+    <p class="meta">Loading takes a couple of minutes when there are many new photos to make.</p>
+  </form>
+
+  {% else %}
+  <form class="box" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="action" value="read">
+    <h3>The supplier's new list</h3>
+    <p class="meta">Choose the PDF as the supplier sent it. The lists here now: {{ lists|join(', ') }}; the site works out which one the file is. You will see what it would change (new items, prices, items dropped) before anything is changed.</p>
+    <label class="opt" for="list-file">Price list (PDF)</label>
+    <div class="srow"><input class="inp" id="list-file" type="file" name="file" accept="application/pdf,.pdf" required> <button class="btn pri" type="submit">Read the list</button></div>
+  </form>
+  {% endif %}
+</div></main>
+{% endblock %}

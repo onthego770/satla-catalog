@@ -27,6 +27,16 @@ refresh        Read regular prices and on hand from QuickBooks and MMK (read-onl
                into the snapshot the pages show. A timer runs this every 30 minutes.
                Once a day it also reads the product lists of Kosher Wine World and
                Kosher Wine Direct, for the edit form's Find button.
+load-price-list  Load a supplier's price list (a PDF) as the items of a price-list
+               state, e.g. `load-price-list MEAT ~/GEN7.pdf --list GEN7`: new items get a
+               catalog entry, prices follow the list, entries already there follow
+               what the supplier changed since its last list. Nothing is read from
+               QuickBooks or MMK.
+read-price-list  Say what loading a newer issue of a list would change, without
+               changing anything (the site's "Upload a new list" page runs this):
+               `read-price-list MEAT ~/GEN7.pdf out.json`. It works out whose list it is.
+price-list-pdf  Print a price-list state's sheet to a PDF file (the site's "Download
+               PDF" button runs this): `price-list-pdf MEAT out.pdf --prices`.
 store-list     Read the product lists of Kosher Wine World and Kosher Wine Direct now.
 set-admin      Give (on) or take away (off) a login's admin rights: the Admin page.
 order-email    Switch the sending of New Order emails on or off. While it is off,
@@ -83,6 +93,11 @@ def cmd_load_products(args):
                 continue
             seen.add(values[0])
             con.execute(sql, values)
+        for r in rows:                      # columns the file gained later
+            sku = (r.get("Satla SKU") or "").strip()
+            for src, col in db.CSV_LATER_COLUMNS.items():
+                if sku and src in r:
+                    con.execute(f"UPDATE products SET {col}=? WHERE sku=?", ((r[src] or "").strip(), sku))
         # The pack figures, when the file has them (it does once it has been exported).
         for r in rows:
             sku = (r.get("Satla SKU") or "").strip()
@@ -147,6 +162,69 @@ def cmd_refresh(_args):
     import catalog_live
     catalog_live.refresh()
     _store_list()
+
+
+def cmd_load_price_list(args):
+    import fcntl
+    import catalog_items
+    import catalog_live
+    import catalog_pricelist
+    said = []
+
+    def report(ok, message):                    # for the upload page, which is waiting
+        if args.report:
+            with open(args.report, "w") as f:
+                json.dump({"ok": ok, "message": message}, f)
+
+    try:
+        db.init()
+        con = db.connect()
+        catalog_live.save_states(con)           # so a state added to the library is known
+        state = _states(con, args.state)[0]
+        rows = (catalog_pricelist.read_cards_pdf(args.file, args.list, args.section) if args.cards
+                else catalog_pricelist.read_pdf(args.file))
+        choices = json.loads(open(args.choices).read()) if args.choices else None
+        photos = None
+        if args.photos:                         # for the items that have no photo yet
+            leave = set((choices or {}).get("leave") or ())
+            catalog_pricelist.PDF_DIR.mkdir(exist_ok=True)
+            with open(catalog_pricelist.PDF_DIR / ".lock", "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)         # one browser at a time: the server is small
+                photos = catalog_pricelist.make_photos({
+                    r["sku"]: r["picture"] for r in rows
+                    if r["picture"] and r["sku"] not in leave and not catalog_items.photos_of(r["sku"])})
+        catalog_pricelist.load(con, state, rows, {"id": None, "name": args.by}, args.list,
+                               photos=photos, choices=choices,
+                               log=lambda text: (said.append(text), print(text)))
+    except ValueError as e:
+        report(False, str(e))
+        sys.exit(str(e))
+    except BaseException as e:
+        report(False, f"{type(e).__name__}: {e}")
+        raise
+    report(True, " ".join(said))
+
+
+def cmd_read_price_list(args):
+    import catalog_pricelist
+    con = db.connect()
+    state = _states(con, args.state)[0]
+    try:
+        name, cards, rows = catalog_pricelist.identify(con, state, args.file)
+        found = dict(catalog_pricelist.compare(con, state, name, rows), cards=cards)
+    except ValueError as e:
+        sys.exit(str(e))
+    with open(args.out, "w") as f:
+        json.dump(found, f)
+    print(f"{name}: {found['count']} items; {len(found['new'])} new, {len(found['prices'])} prices changed, "
+          f"{len(found['details'])} with other changes, {len(found['gone'])} no longer on the list")
+
+
+def cmd_price_list_pdf(args):
+    import catalog_pricelist
+    con = db.connect()
+    catalog_pricelist.write_pdf(con, _states(con, args.state)[0], args.prices, args.out,
+                                only=set(args.only.split(",")) if args.only else None)
 
 
 def cmd_store_list(_args):
@@ -257,6 +335,35 @@ def main():
     lp.set_defaults(func=cmd_load_pack)
     sub.add_parser("refresh").set_defaults(func=cmd_refresh)
     sub.add_parser("store-list").set_defaults(func=cmd_store_list)
+    pl = sub.add_parser("load-price-list")
+    pl.add_argument("state", help="the price-list state, e.g. MEAT")
+    pl.add_argument("file", help="the supplier's price list, a PDF")
+    pl.add_argument("--list", required=True,
+                    help="which supplier's list this is, e.g. GEN7 or CHB; only that list's items are replaced")
+    pl.add_argument("--cards", action="store_true",
+                    help="the PDF is laid out as cards with no item numbers (CH Butcher); "
+                         "--list is then also the brand, and each item number is <list>-<UPC>")
+    pl.add_argument("--section", help="with --cards: the section its new items go under "
+                                       "(else the one chosen on the upload page, else Other)")
+    pl.add_argument("--by", default="manage.py load-price-list",
+                    help="the name Item history shows for the items it adds")
+    pl.add_argument("--photos", action="store_true",
+                    help="make a photo from the list's picture for each item that has none")
+    pl.add_argument("--report", help="a JSON file to write how it went into ({ok, message})")
+    pl.add_argument("--choices", help="a JSON file of what an admin chose on the upload page "
+                                      "(see catalog_pricelist.load())")
+    pl.set_defaults(func=cmd_load_price_list)
+    rl = sub.add_parser("read-price-list")
+    rl.add_argument("state", help="the price-list state, e.g. MEAT")
+    rl.add_argument("file", help="a newer issue of one of the state's lists, a PDF")
+    rl.add_argument("out", help="the JSON file to write what it would change into")
+    rl.set_defaults(func=cmd_read_price_list)
+    pp = sub.add_parser("price-list-pdf")
+    pp.add_argument("state", help="the price-list state, e.g. MEAT")
+    pp.add_argument("out", help="the PDF file to write")
+    pp.add_argument("--prices", action="store_true", help="include the Price column")
+    pp.add_argument("--only", help="only these item numbers, separated by commas")
+    pp.set_defaults(func=cmd_price_list_pdf)
     au = sub.add_parser("add-user")
     au.add_argument("name")
     au.add_argument("email")

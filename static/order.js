@@ -72,14 +72,15 @@
       (p.prev ? '<option value="prev"' + (sel === "prev" ? " selected" : "") + ">Previous " + money(p.prev.p) + " · " + esc(p.prev.d) + "</option>" : "") +
       '<option value="reg"' + (sel === "reg" ? " selected" : "") + ">Regular " + money(p.reg) + "</option>" +
       (sel === "typed" ? '<option value="typed" selected>Typed ' + money(cur) + "</option>" : "") + "</select></span>" +
-      '<span class="meta" style="display:block;margin-top:4px">On hand: ' + (p.hand == null ? "unavailable" : esc(p.hand) + " cases") + "</span>";
+      '<span class="meta" style="display:block;margin-top:4px">On hand: ' + (p.hand == null ? "unavailable" : esc(p.hand) + " cases") + (p.out ? " " + OUT : "") + "</span>";
   }
   function oline(p) {
     const ok = p.reg != null;
-    return '<div class="oline' + (ok ? "" : " off") + '">' + photo(p.sku, p.pv) + "<div><h4>" + esc(p.name) + '</h4><span class="meta">' + esc([p.sku, p.size].filter(Boolean).join(" · ")) + "</span><br>" +
+    return '<div class="oline' + (ok ? "" : " off") + '">' + photo(p.sku, p.pv) + "<div><h4>" + esc(p.name) + (p.out ? ' <span class="tag out">OUT</span>' : "") + '</h4><span class="meta">' + esc([p.sku, p.size].filter(Boolean).join(" · ")) + "</span><br>" +
       (ok ? pricebox(p) : '<span class="price open">No ' + esc(INFO.state) + " price in QuickBooks: cannot be ordered</span>") + "</div>" +
       (ok ? '<div class="qty">' + stepper(p) + "</div>" : "") + "</div>";
   }
+  const OUT = '<b class="outnote">Out of stock</b>';   /* beside on hand; the red OUT box is by the name */
   const who = '<span class="meta">' + esc(INFO.name) + ' <span class="st">' + INFO.co + "</span></span>";
 
   /* ---------- screens ---------- */
@@ -105,7 +106,7 @@
       h += '<div class="box" style="border-style:dashed"><span><b>Copied from invoice ' + esc(S.copied) + ".</b> Same products and quantities. Each price is today's default and can be changed.</span>" +
         (S.skipped.length ? "<span>" + plural(S.skipped.length, "line was", "lines were") + " left out because the product is not in the catalog or cannot be ordered: " + esc(S.skipped.join("; ")) + ".</span>" : "") + "</div>";
     }
-    h += "<div>" + ls.map(l => '<div class="oline">' + photo(l.p.sku, l.p.pv) + "<div><h4>" + esc(l.p.name) + '</h4><span class="meta">' + esc([l.p.sku, l.p.size].filter(Boolean).join(" · ")) + "</span><br>" +
+    h += "<div>" + ls.map(l => '<div class="oline">' + photo(l.p.sku, l.p.pv) + "<div><h4>" + esc(l.p.name) + (l.p.out ? ' <span class="tag out">OUT</span>' : "") + '</h4><span class="meta">' + esc([l.p.sku, l.p.size].filter(Boolean).join(" · ")) + (l.p.out ? " · " + OUT : "") + "</span><br>" +
       '<span class="price">' + money(l.pc) + " per case, " + l.src + " · Line total <b>" + money(l.t) + '</b> · <button class="link" type="button" data-rm="' + esc(l.p.sku) + '">Remove</button></span></div>' +
       '<div class="qty">' + stepper(l.p) + "</div></div>").join("") + "</div>";
     if (!ls.length) h += '<div class="empty"><b>The order is empty.</b><br>Go back and add products.</div>';

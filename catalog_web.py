@@ -33,12 +33,13 @@ from functools import wraps
 from zoneinfo import ZoneInfo
 
 from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request,
-                   send_from_directory, session, url_for)
+                   send_file, send_from_directory, session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import catalog_db as db
 import catalog_items as items
+import catalog_pricelist as pricelist
 import catalog_source as source
 from urllib.parse import quote_plus
 
@@ -61,6 +62,8 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     MAX_CONTENT_LENGTH=6 * 1024 * 1024,        # the largest post is an item's two photos
 )
+
+LIST_PDF_MAX = 30 * 1024 * 1024             # a supplier's price list, uploaded by an admin
 
 # Brute-force throttle for /login: recent failures per visitor address.
 # In-process, which is enough for a single worker.
@@ -111,6 +114,8 @@ def _check_form_token():
     """Every form a signed-in person posts must carry the token this site put
     in the page, so another website cannot post on their behalf."""
     if request.method == "POST" and g.user is not None:
+        if request.endpoint == "admin_price_list" and g.user["is_admin"]:
+            request.max_content_length = LIST_PDF_MAX      # a supplier's PDF is larger than a photo
         sent = request.form.get("csrf") or ""
         if not secrets.compare_digest(sent, session.get("csrf") or "-"):
             abort(400)
@@ -166,6 +171,21 @@ def _order_to(code):
     `order_email` in the library's STATES (the owner, 2026-11-17: each state's
     orders go to their own address). '' when the state has none."""
     return g.states[code].get("order_email") or ""
+
+
+def _price_list(code):
+    """True for a choice on the switch that is a supplier's price list held in
+    Catalog.db (the Meat list; `price_list` in db.states()): it has no stock,
+    no customers and no orders, only items to look at (the owner, 2026-11-18:
+    "View only first")."""
+    return bool(g.states[code].get("price_list"))
+
+
+def _sees_prices(code):
+    """Whether the signed-in person sees this state's prices: everyone, unless
+    the state's row says admins only (the owner, 2026-11-18, on the Meat
+    prices: "Admins only")."""
+    return bool(g.user["is_admin"]) or not g.states[code].get("price_admin_only")
 
 
 @app.context_processor
@@ -233,7 +253,7 @@ def set_state():
         abort(400)
     session["state"] = code
     return redirect(url_for("customers" if request.form.get("section") == "customers"
-                            else "catalog"))
+                            and not _price_list(code) else "catalog"))
 
 
 # --- catalog ------------------------------------------------------------------
@@ -259,6 +279,10 @@ def _kfp(r):
 def catalog():
     # Short keys keep the page small; the grid needs no descriptions.
     # `x` marks an item with no catalog entry.
+    # `out` marks an item with no stock (see _out()).
+    have = db.snapshot(g.db, db.inv_source(g.state))["data"]
+    if _price_list(g.state):
+        return _list_page(have or {})
     products = [{
         "sku": r["sku"], "name": r["name"], "size": r["size"], "brand": r["brand"],
         "cat": r["category"], "type": r["type"], "sweet": r["sweetness"],
@@ -266,8 +290,173 @@ def catalog():
         "mev": r["mevushal"], "kfp": _kfp(r), "org": r["organic"], "vint": r["vintage"],
         **({"x": 1} if r["uncataloged"] else {}),
         **({"pv": r["photo_v"]} if r["photo_v"] else {}),
+        **({"out": 1} if _out(have, r["sku"]) else {}),
     } for r in db.state_products(g.db, g.state)]
     return render_template("catalog.html", products=products)
+
+
+def _list_page(have):
+    """The catalog page of a price list: a table like the supplier's sheet (the
+    owner, 2026-11-18: "Spreadsheet layout similar to the PDF. Meaning, rows
+    and columns", "include the small pics", and the price "in an editable text
+    box"). Rows keep the sheet's order (`n`; pricelist.ordered()). The price goes out only to
+    someone who may see it, and only an admin gets the address that saves it."""
+    prices = (db.snapshot(g.db, db.qbo_source(g.state))["data"] or {}) if _sees_prices(g.state) else None
+    products = [{
+        "sku": r["sku"], "name": r["name"], "size": r["size"], "brand": r["brand"],
+        "cat": r["category"], "upc": r["upc"], "n": n,
+        **({"pv": r["photo_v"]} if r["photo_v"] else {}),
+        **({"price": (prices.get(r["sku"]) or {}).get("price")} if prices is not None else {}),
+    } for n, r in enumerate(pricelist.ordered(g.db, g.state))]
+    return render_template("catalog.html", products=products, prices=prices is not None,
+                           pdf_url=url_for("list_pdf"),
+                           price_url=url_for("admin_list_price") if g.user["is_admin"] else None,
+                           upload_url=url_for("admin_price_list") if g.user["is_admin"] else None)
+
+
+@app.route("/price-list.pdf")
+@login_required
+def list_pdf():
+    """A price list's sheet as a PDF to download, with the state's logo (the
+    owner, 2026-11-18). `?prices=1` adds the Price column, for someone who may
+    see prices; anyone else gets the sheet without it whatever they ask.
+    `?only=` limits it to the items the page is showing (the owner, 2026-11-18:
+    "the pdf only prints what's been filtered at that moment")."""
+    if not _price_list(g.state):
+        abort(404)
+    prices = request.args.get("prices") == "1" and _sees_prices(g.state)
+    # `only`: the item numbers the page is showing just now (its search, section
+    # and brand), separated by commas; absent = the whole list.
+    only = None
+    if request.args.get("only"):
+        held = {p["sku"] for p in db.state_products(g.db, g.state)}
+        only = held & set(request.args["only"].split(","))
+        if not only:
+            abort(404)
+        if only == held:
+            only = None
+    try:
+        path = pricelist.pdf_file(g.db, g.state, prices, only)
+    except RuntimeError as e:
+        app.logger.error("price list PDF failed: %s", e)
+        return render_template("message.html", title="The PDF could not be made", message=(
+            "The server could not make the PDF just now. Try again in a minute.")), 503
+    today = datetime.now(OFFICE_TZ).strftime("%Y-%m-%d")
+    resp = send_file(path, mimetype="application/pdf", as_attachment=True, max_age=0,
+                     download_name=f"Satla-{_state_name(g.state)}-price-list-{today}"
+                                   f"{'' if only is None else '-selection'}"
+                                   f"{'' if prices else '-no-prices'}.pdf")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _typed_price(text):
+    """A price as an admin typed it ("14.04", "$1,200"): a float, or None for a
+    blank box. ValueError when it is not a price."""
+    text = (text or "").strip().replace("$", "").replace(",", "")
+    price = round(float(text), 2) if text else None
+    if price is not None and not 0 <= price <= 99999:      # also refuses "nan"
+        raise ValueError(text)
+    return price
+
+
+@app.route("/admin/list-price", methods=["POST"])
+@admin_required
+def admin_list_price():
+    """Save one price typed on a price list's catalog page. Answers JSON:
+    {'ok': True, 'price': number or None} or {'ok': False, 'error': text}."""
+    sku = request.form.get("sku") or ""
+    if g.state is None or not _price_list(g.state):
+        abort(400)
+    try:
+        price = _typed_price(request.form.get("price"))
+    except ValueError:
+        return jsonify(ok=False, error="Type a price such as 14.04, or leave it blank."), 400
+    if not db.set_list_price(g.db, g.state, sku, price, g.user["name"]):
+        return jsonify(ok=False, error="That item is not on the list."), 404
+    return jsonify(ok=True, price=price)
+
+
+@app.route("/admin/price-list", methods=["GET", "POST"])
+@admin_required
+def admin_price_list():
+    """Upload a newer issue of one of a price list's supplier lists (the owner,
+    2026-11-19: "an Upload box where I can enter in either a new CHB pdf or
+    Springfield pdf so you can parse it and update all the items and add any
+    new items"). Three steps on one page: choose the PDF; see what it would
+    change (nothing is changed yet); confirm. The reading and the loading are
+    pricelist.upload_read() and upload_apply()."""
+    if g.state is None or not _price_list(g.state):
+        abort(404)
+    page = dict(state_name=_state_name(g.state),
+                lists=sorted({v.get("list") for v in (db.snapshot(g.db, db.extra_source(g.state))["data"]
+                                                      or {}).values() if v.get("list")}))
+    if request.method == "GET" and request.args.get("job"):
+        # A load that was confirmed: still running (the page asks again), done, or failed.
+        how = pricelist.upload_state(g.state, request.args["job"])
+        if how is None:
+            return redirect(url_for("admin_price_list"))
+        if how.get("running"):
+            return render_template("pricelist.html", **page, running=True)
+        if how["ok"]:
+            return render_template("pricelist.html", **page, done=how["message"])
+        app.logger.error("price list upload failed: %s", how["message"])
+        return render_template("pricelist.html", **page, problem=(
+            f"The list was NOT loaded, or only part of it. {how['message']} "
+            "Look at the list and at Admin › Item history before trying again."))
+    if request.method == "GET":
+        return render_template("pricelist.html", **page)
+    if request.form.get("action") == "read":
+        f = request.files.get("file")
+        data = f.read(LIST_PDF_MAX + 1) if f and f.filename else b""
+        if not data.startswith(b"%PDF"):
+            return render_template("pricelist.html", **page, problem=(
+                "Choose the supplier's price list as a PDF file, then press Read the list."))
+        try:
+            token, seen = pricelist.upload_read(g.state, data)
+        except RuntimeError as e:
+            return render_template("pricelist.html", **page, problem=f"The list was not read. {e}")
+        return render_template("pricelist.html", **page, token=token, seen=seen, file_name=f.filename)
+    token = request.form.get("token") or ""
+    seen = pricelist.upload_seen(token)
+    if seen is None:
+        return render_template("pricelist.html", **page, problem=(
+            "That upload is no longer here. Choose the file again."))
+    add = set(request.form.getlist("add"))
+    # The price boxes: only a price typed over what the box held is a choice.
+    prices, bad = {}, []
+    for box, rows in (("newprice", seen["new"]),):
+        for n, r in enumerate(rows):
+            try:
+                price = _typed_price(request.form.get(f"{box}-{n}"))
+            except ValueError:
+                bad.append(r["name"])
+                continue
+            if price != (None if r["price"] is None else round(r["price"], 2)):
+                prices[r["sku"]] = r["price"] = price       # shown again if the page comes back
+    if bad:
+        return render_template("pricelist.html", **page, token=token, seen=seen,
+                               file_name=request.form.get("file_name") or "This file", problem=(
+            "Nothing was loaded. Type a price such as 14.04, or leave the box blank, for: "
+            + ", ".join(bad) + "."))
+    choices = {
+        "sections": {r["sku"]: " ".join((request.form.get(f"section-{n}") or "").split())[:60]
+                     for n, r in enumerate(seen["new"]) if not r["section"]},
+        "leave": [r["sku"] for r in seen["new"] if r["sku"] not in add],
+        "prices": prices,
+    }
+    try:
+        pricelist.upload_apply(g.state, token, choices, g.user["name"])
+    except RuntimeError as e:
+        return render_template("pricelist.html", **page, problem=f"The list was NOT loaded: {e}.")
+    return redirect(url_for("admin_price_list", job=token))
+
+
+def _out(have, sku):
+    """Out of stock: the state's last inventory read shows 0 cases or fewer
+    (the owner, 2026-11-17: a red "OUT" box like the Mevushal one). Unknown
+    stock (inventory not read yet) is not called out."""
+    return have is not None and sku in have and have[sku] is not None and have[sku] <= 0
 
 
 def _when(stamp):
@@ -292,6 +481,18 @@ def _state_figures(sku, state):
     qbo, inv = db.snapshot(g.db, db.qbo_source(state)), db.snapshot(g.db, db.inv_source(state))
     name = _state_name(state)
 
+    if _price_list(state):
+        # A price list: the list's own price, and no stock figure at all.
+        listed = (qbo["data"] or {}).get(sku) or {}
+        price = ({"text": "No price on the list", "muted": True} if listed.get("price") is None
+                 else {"text": f"${listed['price']:,.2f}", "muted": False})
+        edited = listed.get("edited")
+        return {"state": name, "price": price, "hand": None, "list": True,
+                "edited": edited and {"by": edited["by"], "at": _when(edited["at"]),
+                                      "was": None if edited["was"] is None else f"${edited['was']:,.2f}"},
+                "sources": [{"label": "Price: " + g.states[state]["inventory"],
+                             "as_of": _when(qbo["fetched_at"]), "stale": False,
+                             "tried": _when(qbo["attempted_at"])}]}
     if qbo["data"] is None:
         price = {"text": "Unavailable", "muted": True}
     elif (qbo["data"].get(sku) or {}).get("price") is None:
@@ -303,7 +504,7 @@ def _state_figures(sku, state):
     elif inv["data"].get(sku) is None:
         hand = {"text": "—", "muted": True}
     else:
-        hand = {"text": _cases(inv["data"][sku]), "muted": False}
+        hand = {"text": _cases(inv["data"][sku]), "muted": False, "out": _out(inv["data"], sku)}
 
     sources = []
     for label, snap in ((f"Regular price: QuickBooks {name}", qbo),
@@ -326,7 +527,12 @@ def product(sku):
                 f"{other['name']} is not in the {_state_name(g.state)} catalog.")), 404
         p = dict(other, uncataloged=False)      # inventory never read yet: show it
     bpc = p["bottles_per_case"]
-    facts = [
+    listed = _price_list(g.state)
+    facts = [(label, value) for label, value in (
+        ("Brand", p["brand"]), ("Section", p["category"]), ("Type", p["type"]),
+        ("Country", p["country"]), ("Specs", p["size"]), ("UPC", p["upc"]),
+        ("Kosher certifier", p["certifier"]), ("SKU", p["sku"])) if value
+    ] if listed else [
         ("Brand", p["brand"]), ("Category", p["category"]), ("Type", p["type"]),
         ("Style", p["style"]), ("Sweetness", p["sweetness"]), ("Grape / base", p["grape"]),
         ("Country", p["country"]), ("Region", p["region"]),
@@ -334,11 +540,19 @@ def product(sku):
         ("Vintage", p["vintage"]), ("Bottle size", p["size"]),
         ("Bottles per case", _cases(bpc) if bpc else ""),
         ("Mevushal", p["mevushal"]), ("Organic", p["organic"]),
-        ("Kosher certifier", p["certifier"]), ("SKU", p["sku"]),
+        ("Kosher certifier", p["certifier"]), *([("UPC", p["upc"])] if p["upc"] else []),
+        ("SKU", p["sku"]),
     ]
-    return render_template("product.html", p=p, facts=facts, live=_state_figures(sku, g.state),
+    return render_template("product.html", p=p, facts=facts,
+                           live=_state_figures(sku, g.state) if _sees_prices(g.state) else None,
                            inventory_name=g.states[g.state]["inventory"],
-                           can_add=bool(p["uncataloged"]) and items.inventory_item(g.db, sku) is not None)
+                           out=_out(db.snapshot(g.db, db.inv_source(g.state))["data"], sku),
+                           can_add=bool(p["uncataloged"]) and items.inventory_item(g.db, sku) is not None,
+                           in_states=[] if p["uncataloged"] else items.catalog_states(g.db, sku),
+                           # Copy is between states that sell the same drinks, never
+                           # to or from a price list.
+                           all_states=[] if listed else
+                           [st for st in g.states if not _price_list(st)])
 
 
 # --- customers and order history (Stage 2) ------------------------------------
@@ -389,6 +603,10 @@ def _customer(company, cid):
 @app.route("/customers")
 @login_required
 def customers():
+    if _price_list(g.state):
+        return render_template("message.html", title="No customers here", message=(
+            f"{_state_name(g.state)} is a price list to look at: it has no customers "
+            "or orders on this site. Use the switch at the top for a state's customers."))
     rows = [{"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
              "st": r["state"]} for r in db.customers(g.db, g.state, _whose())]
     return render_template("customers.html", customers=rows, mine=_whose() is not None,
@@ -463,6 +681,7 @@ def _order_products(company, cid):
                     "pv": r["photo_v"], "cat": r["category"], "grape": r["grape"], "country": r["country"],
                     "region": r["region"], "reg": (prices.get(sku) or {}).get("price"),
                     "hand": _cases(hand) if hand is not None else None,
+                    **({"out": 1} if _out(have, sku) else {}),
                     "prev": {"p": prev["price"], "d": _day(prev["date"])} if prev else None})
     return out
 
@@ -691,12 +910,18 @@ def _posted_photos():
 @admin_required
 def admin_item(sku):
     """Edit a catalog item, or add one: the same form. A SKU with no catalog
-    entry can be added only when a state's inventory system holds it."""
+    entry can be added only when a state's inventory system holds it, or from
+    scratch through "Add new item" on Admin > Add items (?new=1)."""
     row = db.product(g.db, sku)
     adding = row is None
-    p = items.blank_item(g.db, sku) if adding else dict(row)
+    scratch = adding and request.args.get("new") == "1" and items.clean_sku(sku) == sku
+    p = items.blank_item(g.db, sku, scratch=scratch) if adding else dict(row)
     if p is None:
         abort(404)
+    scratch = adding and items.inventory_item(g.db, sku) is None
+    source, matches = _copy_source(sku, p) if adding else (None, [])
+    if source:
+        p = items.copied(g.db, source, p)
     problems = []
     if request.method == "POST":
         if request.form.get("action") == "delete":
@@ -712,6 +937,8 @@ def admin_item(sku):
         else:
             values, problems = items.clean(request.form)
             photos = _posted_photos()
+            if photos is items.KEEP and source:
+                photos = items.photos_of(source["sku"]) or items.KEEP   # the copy takes the photo too
             if photos is not items.KEEP and photos:
                 problem = items.check_photos(photos)
                 if problem:
@@ -727,11 +954,70 @@ def admin_item(sku):
                       f"{_state_name(g.state) if g.state else 'current'} catalog, "
                       "so its page is not shown here.")
                 return redirect(url_for("admin_history"))
-    has_photo = not adding and (PHOTO_DIR / "detail" / f"{sku}.webp").exists()
-    return render_template("item.html", p=p, adding=adding, problems=problems,
+    photo_sku = source["sku"] if source else (None if adding else sku)
+    has_photo = bool(photo_sku) and (PHOTO_DIR / "detail" / f"{photo_sku}.webp").exists()
+    shown = not adding and bool(g.state and db.state_product(g.db, g.state, sku))
+    held = items.catalog_states(g.db, sku)
+    return render_template("item.html", p=p, adding=adding, scratch=scratch, shown=shown, problems=problems,
+                           source=source, matches=[m for m in matches if not source or m["sku"] != source["sku"]],
+                           photo_sku=photo_sku, photo_v=(source or p).get("photo_v"),
+                           source_states="/".join(items.catalog_states(g.db, source["sku"])) if source else "",
+                           # An item only a price list holds: its "size" is the list's Specs.
+                           specs=bool(held) and all(_price_list(st) for st in held),
                            fields=items.FIELDS, suggest=items.suggestions(g.db),
                            names=items.system_names(g.db, sku), has_photo=has_photo,
                            sizes=items.PHOTO_SIZES), (400 if problems else 200)
+
+
+def _copy_source(sku, p):
+    """For the Add form: the catalog entry to fill it from, and the entries
+    that may be the same item under another number in the other state's
+    catalog (the owner, 2026-11-18: "check the opposite catalog to see if it's
+    already there? If yes ... pre-populate the screen with that"). `?copy=<SKU>`
+    names the entry (the product page's Copy button); `?copy=` starts blank;
+    with neither, the best match fills the form only when it is strong
+    (items.sure_match()); otherwise they are only offered."""
+    inv = items.inventory_item(g.db, sku)
+    mine = [inv["state"]] if inv else ([g.state] if g.state else [])
+    other = [st for st in g.states if st not in mine and not _price_list(st)]
+    matches = items.copy_matches(g.db, sku, (p.get("name") or "") if inv else "", other)
+    asked = request.args.get("copy")
+    if asked:
+        row = db.product(g.db, asked)
+        if row is None or asked == sku:
+            abort(404)
+        return dict(row), matches
+    if asked is None and (sure := items.sure_match(matches)):
+        return dict(db.product(g.db, sure["sku"])), matches
+    return None, matches
+
+
+@app.route("/admin/copy/<path:sku>", methods=["GET"])
+@admin_required
+def admin_copy(sku):
+    """The product page's Copy button: put a copy of this catalog entry under
+    the item number another state uses for the same item. Lists that state's
+    items with no catalog entry, closest first, and takes any item number."""
+    row = db.product(g.db, sku)
+    to = request.args.get("to") or ""
+    if row is None or to not in g.states or _price_list(to):
+        abort(404)
+    error = None
+    number = items.clean_sku(request.args.get("number")) if "number" in request.args else None
+    if "number" in request.args:
+        if number is None:
+            error = "Type an item number (letters, digits, spaces and . _ / - only, at most 40 characters)."
+        elif db.product(g.db, number):
+            error = f"{number} is already in the catalog ({db.product(g.db, number)['name']}). Open its page to edit it."
+        else:
+            args = {"copy": sku} | ({} if items.inventory_item(g.db, number) else {"new": 1})
+            return redirect(url_for("admin_item", sku=number, **args))
+    hidden = db.hidden_items(g.db)
+    rows = [dict(r, hidden=r["sku"] in hidden) for r in items.other_items(g.db, sku, row["name"], to)]
+    there = items.copy_matches(g.db, sku, row["name"], [to])
+    return render_template("copy.html", p=row, to=to, to_name=_state_name(to), there=there,
+                           inventory_name=g.states[to]["inventory"], rows=rows, error=error,
+                           number=request.args.get("number") or ""), (400 if error else 200)
 
 
 def _store_password():
@@ -841,10 +1127,20 @@ def admin_source_image():
 def admin_items():
     """What can be added: the items of the current state's inventory that have
     no catalog entry, less those an admin hid (a Hide button on each row, and
-    "Show again" under the list). Hiding changes this list only."""
+    "Show again" under the list; a hidden item is also off the catalog). Also
+    "Add new item" from scratch, and the catalog items no inventory holds yet."""
     if g.state is None:
         abort(404)
     rows = sorted(db.uncataloged(g.db, g.state), key=lambda r: (r["name"] or "").casefold())
+    if request.method == "POST" and request.form.get("action") == "new":
+        sku = items.clean_sku(request.form.get("new_sku"))
+        if sku is None:
+            _note("Type the new item's number (letters, digits, spaces and . _ / - only, "
+                  "at most 40 characters), then press Add new item.")
+            return redirect(url_for("admin_items"))
+        if db.product(g.db, sku) or items.inventory_item(g.db, sku):
+            return redirect(url_for("admin_item", sku=sku))   # edit it, or add it from its inventory record
+        return redirect(url_for("admin_item", sku=sku, new=1))
     if request.method == "POST":
         sku = request.form.get("sku") or ""
         row = next((r for r in rows if r["sku"] == sku), None)
@@ -857,7 +1153,7 @@ def admin_items():
     hidden = db.hidden_items(g.db)
     return render_template("items.html", rows=[r for r in rows if r["sku"] not in hidden],
                            hidden=[r for r in rows if r["sku"] in hidden],
-                           state_name=_state_name(g.state),
+                           state_name=_state_name(g.state), waiting=items.not_in_inventory(g.db),
                            inventory_name=g.states[g.state]["inventory"], note=_note())
 
 

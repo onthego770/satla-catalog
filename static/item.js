@@ -11,15 +11,7 @@
    Nothing is saved until the admin presses Save. */
 "use strict";
 (function () {
-  const box = document.getElementById("photobox");
-  if (!box) return;
-  const pick = document.getElementById("photo-src"), msg = document.getElementById("photo-msg");
-  const now = document.getElementById("photo-now"), img = now.querySelector("img");
-  const out = {grid: document.getElementById("photo-grid"), detail: document.getElementById("photo-detail")};
-  const remove = document.querySelector('input[name="photo_remove"]');
   const FILL = 0.9, WHITE = 240, WORK = 1600, QUALITY = 0.85;
-  const say = (text, bad) => { msg.textContent = text; msg.classList.toggle("open", !!bad); };
-  const clear = () => { for (const k in out) out[k].value = ""; };
 
   /* Find the product in a picture: {x, y, w, h} in the picture's own pixels, the
      box around the product only, or null for a blank picture.
@@ -118,6 +110,27 @@
     }
     return new Promise(done => c.toBlob(done, "image/webp", QUALITY));
   }
+
+  /* The catalog photos of a picture, for a caller that has no edit form: the
+     server, when it loads a supplier's price list (catalog_pricelist.make_photos()
+     opens a blank page holding this script). `sizes` is {kind: "600x800"};
+     answers {kind: a WebP Blob}, or null for a blank picture. */
+  window.catalogPhotos = async function (blob, sizes) {
+    const bmp = await createImageBitmap(blob), b = productBox(bmp);
+    if (!b) return null;
+    const made = {};
+    for (const kind in sizes) made[kind] = await render(bmp, b, sizes[kind]);
+    return made;
+  };
+
+  const box = document.getElementById("photobox");
+  if (!box) return;
+  const pick = document.getElementById("photo-src"), msg = document.getElementById("photo-msg");
+  const now = document.getElementById("photo-now"), img = now.querySelector("img");
+  const out = {grid: document.getElementById("photo-grid"), detail: document.getElementById("photo-detail")};
+  const remove = document.querySelector('input[name="photo_remove"]');
+  const say = (text, bad) => { msg.textContent = text; msg.classList.toggle("open", !!bad); };
+  const clear = () => { for (const k in out) out[k].value = ""; };
 
   /* Make the two catalog photos from a picture (a file the admin picked, or one
      fetched from the store) and show the preview. True when it worked. */

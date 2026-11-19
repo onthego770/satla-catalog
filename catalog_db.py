@@ -21,12 +21,18 @@ Tables:
                  is the comma-separated list of state codes the login may use
                  ("IL,FL"; owner, 2026-11-15). There is no sign-up. An admin (owner, 2026-11-15) manages logins on the
                  site's Admin page; `manage.py add-user` still works too.
+                 A price-list state (see `states`) keeps its items here too:
+                 the list's section is the `category`, its "Specs" the `size`,
+                 and `upc` its UPC (catalog_pricelist.py).
   live_snapshot  The LAST READ, per state: `qbo_<st>` = regular prices from that
                  state's QuickBooks company; `inv_<st>` = cases on hand for the
                  catalog products that state HAS (Illinois: MMK; Florida:
                  QuickBooks Florida), which is also the list of what the state
                  sells; `states` = the states themselves, copied from the
-                 library's STATES table. This is a cache of a read,
+                 library's STATES table. For a price-list state (the Meat
+                 list) the same three keys hold the supplier's price list as
+                 last loaded by `manage.py load-price-list`, and the timer
+                 leaves them alone. This is a cache of a read,
                  not item data: `manage.py refresh` rewrites it on a timer and the
                  pages show its "as of" time. Nothing here is ever written back to
                  QuickBooks or MMK.
@@ -81,6 +87,7 @@ CREATE TABLE IF NOT EXISTS products (
     bottles_per_case REAL,
     bottle_ml        REAL,
     pack_source      TEXT,
+    upc              TEXT,
     photo_v          INTEGER             -- set when the photo changes (cache key); NULL = never changed
 );
 CREATE TABLE IF NOT EXISTS product_changes (
@@ -164,6 +171,11 @@ CSV_PACK_COLUMNS = {
     "Bottle ml": "bottle_ml",
     "Pack Source": "pack_source",
 }
+# CSV column -> products column: added with the Meat price list (2026-11-18).
+# Written by the export; `manage.py load-products` reads it when the file has it.
+CSV_LATER_COLUMNS = {
+    "UPC": "upc",
+}
 
 # CSV column -> products column. Only the columns the handoff marks "use".
 CSV_COLUMNS = {
@@ -219,6 +231,8 @@ def init():
             con.execute("UPDATE users SET states = 'IL,FL'")
         if "photo_v" not in {r["name"] for r in con.execute("PRAGMA table_info(products)")}:
             con.execute("ALTER TABLE products ADD COLUMN photo_v INTEGER")
+        if "upc" not in {r["name"] for r in con.execute("PRAGMA table_info(products)")}:
+            con.execute("ALTER TABLE products ADD COLUMN upc TEXT")
         if "salesman" not in {r["name"] for r in con.execute("PRAGMA table_info(qbo_customers)")}:
             # Filled by the next refresh; until then only admins see customers.
             con.execute("ALTER TABLE qbo_customers ADD COLUMN salesman TEXT")
@@ -338,12 +352,15 @@ def state_products(con, state):
     A state's products are the catalog products that have a record in its
     inventory (snapshot inv_<st>), then, for a state that lists its whole
     inventory (`catalog_all` in the library's STATES), the items with no
-    catalog entry: see uncataloged(). `mevushal` follows the name: see mevushal()."""
+    catalog entry: see uncataloged(), less the ones an admin hid (the owner,
+    2026-11-17: "anything that I deem "Hidden" I don't want to show up on the
+    Catalog page"; see hidden_items()). `mevushal` follows the name: see mevushal()."""
     have = snapshot(con, inv_source(state))["data"] or {}
     out = [dict(r, uncataloged=False) for r in con.execute("SELECT * FROM products")
            if r["sku"] in have]
     if (states(con).get(state) or {}).get("catalog_all"):
-        out += uncataloged(con, state)
+        hidden = hidden_items(con)
+        out += [r for r in uncataloged(con, state) if r["sku"] not in hidden]
     for p in out:
         p["mevushal"] = mevushal(p["name"], p["mevushal"])
     return sorted(out, key=lambda r: ((r["brand"] or "") + (r["name"] or "")).casefold())
@@ -352,8 +369,9 @@ def state_products(con, state):
 def hidden_items(con):
     """{sku: row} of the inventory items an admin took off Admin > Add items
     (the owner, 2026-11-17: "Please remove these from the Admin / Add Items
-    list for IL and FL"). They stay in the inventory systems; only that list
-    leaves them out."""
+    list for IL and FL"). They stay in the inventory systems; that list shows
+    them apart, and the catalog, product pages and New Order leave them out
+    (state_products())."""
     return {r["sku"]: dict(r) for r in con.execute("SELECT * FROM hidden_items")}
 
 
@@ -390,12 +408,18 @@ def state_product(con, state, sku):
 
 
 def states(con):
-    """{code: {'name', 'inventory', 'catalog_all', 'order_email'}} for every
+    """{code: {'name', 'inventory', 'catalog_all', 'order_email', 'price_list',
+    'price_admin_only'}} for every
     state the last refresh knew, in the library's order. `inventory` names the
     system that holds that state's inventory ("MMK", "QuickBooks Florida");
     `catalog_all` is True for a state whose catalog lists every item of that
     inventory; `order_email` is where an order for a customer of that state is
-    emailed ('' = nowhere: the state cannot send orders)."""
+    emailed ('' = nowhere: the state cannot send orders); `price_list` is True
+    for a choice that is a supplier's price list held in Catalog.db (the Meat
+    list: no QuickBooks company, no MMK, no stock, customers or orders; see
+    catalog_pricelist.py); `price_admin_only` is True when only admins see
+    that state's prices; `contact` is the line its price list PDF prints under
+    the date ('' = none)."""
     return snapshot(con, STATES_SOURCE)["data"] or {}
 
 
@@ -417,6 +441,35 @@ def save_snapshot(con, source, payload=None, error=None):
         else:
             con.execute("UPDATE live_snapshot SET attempted_at=?, ok=0, error=? "
                         "WHERE source=?", (stamp, str(error)[:300], source))
+
+
+def set_list_price(con, state, sku, price, user_name):
+    """Change one item's price on a price-list state's list (the owner,
+    2026-11-18: the price "in an editable text box. Moving off the text box
+    saves the price changes"). `price` is a float, or None for no price.
+    Returns False when the list does not hold the SKU.
+
+    The price lives in the state's price snapshot (qbo_source()); the entry is
+    marked `edited` = {'by', 'at', 'was'} (`was` = the price the supplier's
+    list printed), so the page can say so and a later load of the supplier's
+    list keeps the typed price (catalog_pricelist.load()). The snapshot's "as
+    of" time, which is when the list was loaded, is not touched."""
+    source = qbo_source(state)
+    with con:
+        con.execute("BEGIN IMMEDIATE")           # two admins typing at once: one after the other
+        row = con.execute("SELECT payload FROM live_snapshot WHERE source = ?", (source,)).fetchone()
+        data = json.loads(row["payload"]) if row and row["payload"] else {}
+        if sku not in data:
+            return False
+        entry = data[sku]
+        if entry.get("price") != price:
+            was = entry["edited"]["was"] if entry.get("edited") else entry.get("price")
+            entry["price"] = price
+            entry["edited"] = {"by": user_name, "at": now_utc(), "was": was}
+            if price == was:                     # typed back to the list's own price
+                del entry["edited"]
+            con.execute("UPDATE live_snapshot SET payload = ? WHERE source = ?", (json.dumps(data), source))
+    return True
 
 
 def snapshot(con, source):

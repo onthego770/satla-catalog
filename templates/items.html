@@ -7,6 +7,13 @@
   <h2 class="title">Add items: {{ state_name }}</h2>
   {% if note %}<p class="okbox" role="status">{{ note }}</p>{% endif %}
   <p class="meta">{{ rows|length }} {{ 'item' if rows|length == 1 else 'items' }} in {{ inventory_name }} with no catalog entry. Press one to add it to the catalog. To see the other state's list, use the state switch at the top. To edit an item that is already in the catalog, open its page and press Edit.</p>
+  <form class="box" method="post" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="action" value="new">
+    <h3>Add new item</h3>
+    <p class="meta">For an item that is not on the list below: type its item number (the SKU it has, or will have, in QuickBooks or MMK) and fill in the form that opens. It shows in a state's catalog once that state's QuickBooks or MMK holds the same item number.</p>
+    <label class="opt" for="new-sku">Item number</label>
+    <div class="srow"><input class="inp" id="new-sku" name="new_sku" maxlength="40" required> <button class="btn pri" type="submit">Add new item</button></div>
+  </form>
   <div class="list">
     {% for r in rows %}
     <div class="rowline">
@@ -23,12 +30,23 @@
   </div>
   {% if hidden %}
   <h3 class="title">Hidden: {{ hidden|length }}</h3>
-  <p class="meta">Kept off the list above. They are still in {{ inventory_name }}; hiding changes this list only.</p>
+  <p class="meta">Kept off the list above. They are still in {{ inventory_name }}, but they do not show on the catalog. A deleted item is hidden too.</p>
   <div class="list">
     {% for r in hidden %}
     <div class="rowline">
       <div class="rowbtn"><b>{{ r['name'] }}</b><span class="meta">{{ r['sku'] }}{% if r['size'] %} · {{ r['size'] }}{% endif %}</span></div>
       <form method="post"><input type="hidden" name="csrf" value="{{ form_token() }}"><input type="hidden" name="sku" value="{{ r['sku'] }}"><input type="hidden" name="action" value="show"><button class="btn sm" type="submit">Show again</button></form>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if waiting %}
+  <h3 class="title">In the catalog, waiting for QuickBooks or MMK: {{ waiting|length }}</h3>
+  <p class="meta">Added here, but no state's inventory holds their item number yet, so no catalog shows them. Press one to edit it.</p>
+  <div class="list">
+    {% for r in waiting %}
+    <div class="rowline">
+      <a class="rowbtn" href="{{ url_for('admin_item', sku=r['sku']) }}"><b>{{ r['name'] }}</b><span class="meta">{{ r['sku'] }}{% if r['size'] %} · {{ r['size'] }}{% endif %}</span><span class="end"><span class="btn sm">Edit</span></span></a>
     </div>
     {% endfor %}
   </div>

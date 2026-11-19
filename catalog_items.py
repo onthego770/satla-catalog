@@ -27,7 +27,7 @@ import time
 import unicodedata
 
 import catalog_db as db
-from catalog_source import plain
+from catalog_source import plain, rank
 
 PHOTO_DIR = db.ROOT / "photos"
 CSV_PATH = db.ROOT / "Satla_Master_Catalog.csv"
@@ -56,12 +56,13 @@ FIELDS = [
     ("subregion", "Sub-region / appellation", "text", 100),
     ("abv", "ABV", "text", 20),
     ("vintage", "Vintage", "text", 20),
-    ("size", "Bottle size", "text", 20),
+    ("size", "Bottle size", "text", 40),      # a price-list item's "Specs" live here too
     ("bottles_per_case", "Bottles per case", "number", 8),
     ("mevushal", "Mevushal", "yesno", 3),
     ("kfp", "Kosher for Passover", "yesno", 3),
     ("organic", "Organic", "yesno", 3),
     ("certifier", "Kosher certifier", "text", 120),
+    ("upc", "UPC", "text", 20),
     ("description", "Description", "long", 3000),
 ]
 LABELS = {col: label for col, label, _kind, _n in FIELDS}
@@ -95,7 +96,8 @@ def inventory_item(con, sku):
     """What the inventory systems hold for a SKU: {'name', 'ml', 'bpc', 'state'}
     from the first state whose inventory has it, or None when no state does.
     An item can be added to the catalog only when this finds it (the owner:
-    never add a product from QuickBooks Illinois alone, and nothing from thin air)."""
+    never add a product from QuickBooks Illinois alone). The one other way in is
+    an admin's "Add new item" (blank_item(scratch=True))."""
     for state in db.states(con):
         have = db.snapshot(con, db.inv_source(state))["data"] or {}
         v = (db.snapshot(con, db.extra_source(state))["data"] or {}).get(sku)
@@ -111,12 +113,96 @@ def system_names(con, sku):
     for state, info in db.states(con).items():
         inv = (db.snapshot(con, db.extra_source(state))["data"] or {}).get(sku) or {}
         qbo = (db.snapshot(con, db.qbo_source(state))["data"] or {}).get(sku) or {}
+        # A price-list state has no QuickBooks company: its one name is the list's.
         for system, name in ((info["inventory"], inv.get("name")),
-                             ("QuickBooks " + info["name"], qbo.get("name"))):
+                             ("QuickBooks " + info["name"],
+                              None if info.get("price_list") else qbo.get("name"))):
             if name and system not in seen:
                 seen.add(system)
                 out.append((system, name))
     return out
+
+
+def catalog_states(con, sku):
+    """The states whose catalog shows this SKU's entry: those whose inventory
+    holds the SKU, in the library's order (one catalog entry serves every state
+    that holds its item number)."""
+    return [st for st in db.states(con)
+            if sku in (db.snapshot(con, db.inv_source(st))["data"] or {})]
+
+
+def copy_matches(con, sku, name, states, limit=6):
+    """Catalog entries shown in any of `states` that look like the same item as
+    `sku` / `name` under another item number, best first (the owner, 2026-11-18:
+    on Add, "check the opposite catalog to see if it's already there"). Ranked
+    like the store matches (catalog_source.rank()): the same number apart from a
+    vintage or (M) ending, then the closest names. Each carries 'why'."""
+    held = set()
+    for st in states:
+        held |= set(db.snapshot(con, db.inv_source(st))["data"] or {})
+    shown = [dict(r, skus=[r["sku"]], name=r["name"] or "")
+             for r in con.execute("SELECT * FROM products") if r["sku"] != sku and r["sku"] in held]
+    return rank(shown, sku, name, limit=limit)
+
+
+def sure_match(matches):
+    """The one of copy_matches() good enough to fill the Add form by itself, or
+    None: the best when it is the same number apart from its ending or the same
+    name, or a close name when no other entry is close at all. Otherwise the
+    matches are only offered (two similar wines are never guessed between)."""
+    if not matches:
+        return None
+    if matches[0]["why"] in ("Same item number, other vintage or (M)", "Name matches"):
+        return matches[0]
+    return matches[0] if len(matches) == 1 else None
+
+
+def other_items(con, sku, name, state, limit=8):
+    """The items of `state`'s inventory with no catalog entry that look like
+    the same item as `sku` / `name`, best first: where the product page's Copy
+    button offers to put a copy (hidden items included: adding one shows it)."""
+    rows = [dict(r, skus=[r["sku"]], name=r["name"] or "") for r in db.uncataloged(con, state)]
+    return rank(rows, sku, name, limit=limit)
+
+
+def copied(con, source, blank):
+    """The Add form's starting values for `blank` (blank_item()) filled from the
+    catalog entry `source`: every detail, description and photo comes from the
+    source; the item number, and the name and pack figures when the inventory
+    knows them, stay the new item's own."""
+    row = dict(source)
+    inv = inventory_item(con, blank["sku"])
+    row.update(sku=blank["sku"], photo_v=None, pack_source=None)
+    if inv:
+        row.update(name=blank["name"], size=blank["size"], bottles_per_case=blank["bottles_per_case"],
+                   bottle_ml=blank["bottle_ml"])
+    return row
+
+
+def photos_of(sku):
+    """A catalog item's photos as {kind: bytes}, for a copy; {} when it has none."""
+    return {kind: path.read_bytes() for kind in PHOTO_SIZES
+            if (path := _photo_path(kind, sku)).exists()}
+
+
+def clean_sku(text):
+    """An item number typed for "Add new item": trimmed, inner spaces kept as one,
+    or None when it is blank, too long or holds a character no item number here
+    uses."""
+    sku = " ".join(str(text or "").split())
+    if not sku or len(sku) > 40 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._/-]*", sku):
+        return None
+    return sku
+
+
+def not_in_inventory(con):
+    """Catalog products that no state's inventory holds: they show in no state's
+    catalog (an item added from scratch before QuickBooks or MMK had it)."""
+    have = set()
+    for state in db.states(con):
+        have |= set(db.snapshot(con, db.inv_source(state))["data"] or {})
+    return [dict(r) for r in con.execute("SELECT * FROM products ORDER BY name COLLATE NOCASE")
+            if r["sku"] not in have]
 
 
 def suggestions(con):
@@ -215,13 +301,18 @@ def grape_for(con, name):
 
 # --- the form ------------------------------------------------------------------
 
-def blank_item(con, sku):
+def blank_item(con, sku, scratch=False):
     """The form's starting values for an item with no catalog entry yet: what the
-    inventory system knows, or None when no inventory system has the SKU."""
+    inventory system knows, or None when no inventory system has the SKU. With
+    `scratch`, an item no inventory system holds yet starts empty instead (the
+    owner, 2026-11-18: an "Add New Item" button "from scratch"); it shows in a
+    state's catalog once that state's inventory has the SKU."""
     inv = inventory_item(con, sku)
     if inv is None:
-        return None
-    return dict(dict.fromkeys(_columns(con)), sku=sku, name=inv["name"] or sku,
+        return dict.fromkeys(_columns(con), None) | {"sku": sku} if scratch else None
+    # The state's QuickBooks name when it has one: MMK's names carry the pack ("750/12").
+    qbo = (db.snapshot(con, db.qbo_source(inv["state"]))["data"] or {}).get(sku) or {}
+    return dict(dict.fromkeys(_columns(con)), sku=sku, name=qbo.get("name") or inv["name"] or sku,
                 size=db._size(inv["ml"]), bottles_per_case=inv["bpc"], bottle_ml=inv["ml"])
 
 
@@ -383,6 +474,16 @@ def save(con, sku, after, user, action, photos=KEEP, undoes=None):
              0 if photos is KEEP else (1 if photos else 2), undoes))
         change_id = cur.lastrowid
         con.execute("DELETE FROM products WHERE sku = ?", (sku,))
+        # A deleted item is also hidden, so it does not come back on the
+        # catalog as "Not in catalog" while QuickBooks or MMK still hold it
+        # (the owner, 2026-11-18: deleted items "are still showing on the
+        # catalog page. Can you make sure they don't?"). Putting the entry
+        # back (undo or add) shows it again. See db.hidden_items().
+        if after is None and before is not None:
+            con.execute("INSERT OR REPLACE INTO hidden_items (sku, hidden_at, hidden_by) VALUES (?,?,?)",
+                        (sku, db.now_utc(), user["name"]))
+        elif after is not None:
+            con.execute("DELETE FROM hidden_items WHERE sku = ?", (sku,))
         if after is not None:
             cols = _columns(con)
             con.execute(f"INSERT INTO products ({', '.join(cols)}) "
@@ -476,7 +577,7 @@ def export_file(con, path=None):
     is added at the end. The pack figures (CSV_PACK_COLUMNS) are added as columns
     if the file lacks them. Returns the number of products written."""
     path = path or CSV_PATH
-    mapping = {**db.CSV_COLUMNS, **db.CSV_PACK_COLUMNS}
+    mapping = {**db.CSV_COLUMNS, **db.CSV_PACK_COLUMNS, **db.CSV_LATER_COLUMNS}
     header, old, newline = list(mapping), {}, "\n"
     if path.exists():
         text = path.read_text(encoding="utf-8-sig")

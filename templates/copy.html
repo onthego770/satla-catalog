@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% set section = 'admin' %}
+{% block title %}Copy {{ p['sku'] }} to {{ to }} · Satla Spirits{% endblock %}
+{% block body %}
+<main class="wrap"><div class="pad">
+  <div><a class="link" href="{{ url_for('product', sku=p['sku']) }}">‹ Back to {{ p['name'] }}</a></div>
+  <h2 class="title">Copy to {{ to_name }} <span class="st">{{ p['sku'] }}</span></h2>
+  <p class="meta">{{ p['name'] }} is not in the {{ to_name }} catalog, because {{ inventory_name }} does not hold item number {{ p['sku'] }}. Choose the item number {{ inventory_name }} uses for the same item: the Add form opens filled in from {{ p['sku'] }} (details, description and photo), and nothing is saved until you press Add to catalog.</p>
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  {% if there %}
+  <h3 class="title">Already in the {{ to_name }} catalog, maybe</h3>
+  <p class="meta">These {{ to_name }} entries have a similar item number or name. If one of them is this item, there is nothing to copy.</p>
+  <div class="list">
+    {% for m in there %}
+    <div class="rowline"><a class="rowbtn" href="{{ url_for('admin_item', sku=m['sku']) }}"><b>{{ m['name'] }}</b><span class="meta">{{ m['sku'] }} · {{ m['why'] }}</span><span class="end"><span class="btn sm">Edit</span></span></a></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <h3 class="title">Closest items in {{ inventory_name }} with no catalog entry</h3>
+  <div class="list">
+    {% for r in rows %}
+    <div class="rowline">
+      <a class="rowbtn" href="{{ url_for('admin_item', sku=r['sku'], copy=p['sku']) }}">
+        <b>{{ r['name'] }}</b>
+        <span class="meta">{{ r['sku'] }}{% if r['size'] %} · {{ r['size'] }}{% endif %}{% if r['bottles_per_case'] %} · {{ '%g'|format(r['bottles_per_case']) }} per case{% endif %} · {{ r['why'] }}{% if r['hidden'] %} · hidden{% endif %}</span>
+        <span class="end"><span class="btn sm">Copy here</span></span>
+      </a>
+    </div>
+    {% else %}
+    <div class="empty">No item in {{ inventory_name }} without a catalog entry looks like this one.</div>
+    {% endfor %}
+  </div>
+  <form class="box" method="get" autocomplete="off">
+    <input type="hidden" name="to" value="{{ to }}">
+    <h3>Or type the item number</h3>
+    <p class="meta">If {{ inventory_name }} does not hold it yet, the copy waits on Admin › Add items until it does.</p>
+    <div class="srow"><input class="inp" name="number" maxlength="40" required value="{{ number }}" aria-label="Item number"> <button class="btn pri" type="submit">Copy</button></div>
+  </form>
+</div></main>
+{% endblock %}

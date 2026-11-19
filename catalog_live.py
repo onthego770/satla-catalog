@@ -40,6 +40,8 @@ ALL_INVOICES_FROM = "2000-01-01"   # previous prices use every invoice, however 
 # The customer custom field in QuickBooks that names the customer's salesman.
 # A company that has no such field gives every customer a blank salesman.
 SALESMAN_FIELD = "SALESMAN"
+# The library's word for a STATES row with no inventory system behind it.
+PRICE_LIST = "list"
 
 
 def _library():
@@ -131,9 +133,28 @@ def read_company(state, qb, skus):
     return items, customers, invoices, last_prices
 
 
+def save_states(con):
+    """Copy the library's STATES table into Catalog.db (snapshot `states`), for
+    the web pages: each state's name, the name of its inventory system, and the
+    flags the site acts on. `price_list` marks a row whose inventory is "list":
+    a supplier's price list held in Catalog.db, with no QuickBooks company and
+    no MMK behind it."""
+    mc = _library()
+    db.save_snapshot(con, db.STATES_SOURCE, payload={
+        code: {"name": info["name"], "inventory": info["inventory_name"],
+               "catalog_all": bool(info.get("catalog_all")),
+               "order_email": info.get("order_email") or "",
+               "price_list": info["inventory"] == PRICE_LIST,
+               "price_admin_only": bool(info.get("price_admin_only")),
+               "contact": info.get("contact") or ""}
+        for code, info in mc.STATES.items()})
+
+
 def refresh(log=print):
     """Read every state and store it in Catalog.db. One source failing does not
     stop the others; a failure keeps that source's last good figures.
+
+    A price-list state (the Meat list) is skipped: nothing outside holds it.
 
     Stored per state (codes come from the library's STATES): snapshot
     `qbo_<st>` = {sku: {price, name}} for every item of that state's QuickBooks
@@ -156,11 +177,7 @@ def refresh(log=print):
     db.init()                                        # creates any missing table
     con = db.connect()
     catalog_skus = db.skus(con)
-    db.save_snapshot(con, db.STATES_SOURCE, payload={
-        code: {"name": info["name"], "inventory": info["inventory_name"],
-               "catalog_all": bool(info.get("catalog_all")),
-               "order_email": info.get("order_email") or ""}
-        for code, info in mc.STATES.items()})
+    save_states(con)
     results = {}
 
     def inventory(state, qb):
@@ -181,6 +198,11 @@ def refresh(log=print):
             log(f"{label} inventory ({info['inventory_name']}): FAILED - {type(e).__name__}: {e}")
 
     for state, info in mc.STATES.items():
+        if info["inventory"] == PRICE_LIST:
+            # Nothing to read: its price list is loaded by hand
+            # (`manage.py load-price-list`) and its snapshots stay as loaded.
+            log(f"{info['name']}: a price list held in Catalog.db, not read here")
+            continue
         source, label = db.qbo_source(state), info["name"]
         inventory_read = False
         try:

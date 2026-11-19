@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 {% block title %}{{ p['name'] }} · Satla Spirits{% endblock %}
 {% macro val(v) %}{% if v %}{{ v }}{% else %}<span class="meta">—</span>{% endif %}{% endmacro %}
-{% macro fig(f) %}<td{% if f.muted %} class="meta"{% endif %}>{{ f.text }}</td>{% endmacro %}
+{% macro fig(f) %}<td{% if f.muted %} class="meta"{% endif %}>{{ f.text }}{% if f.out %} <span class="tag out">OUT</span> <b class="outnote">Out of stock</b>{% endif %}</td>{% endmacro %}
 {% block body %}
 <main class="wrap"><div class="pad">
   <div class="count"><a class="link" href="{{ url_for('catalog') }}">‹ Back to results</a>
     {% if g.user['is_admin'] and (not p['uncataloged'] or can_add) %}<a class="btn sm" href="{{ url_for('admin_item', sku=p['sku']) }}">{{ 'Add to catalog' if p['uncataloged'] else 'Edit' }}</a>{% endif %}</div>
+  {% if g.user['is_admin'] and not p['uncataloged'] %}
+  <div class="count catline"><span class="meta">Catalog:</span> <b>{{ in_states|join('/') if in_states else 'none yet' }}</b>
+    {% for st in all_states if st not in in_states %}<a class="btn sm" href="{{ url_for('admin_copy', sku=p['sku'], to=st) }}">Copy to {{ st }}</a>{% endfor %}</div>
+  {% endif %}
   <div class="detail">
     <div>
       <div class="ph">
@@ -17,6 +21,7 @@
       <span class="eyebrow">{{ p['brand'] }}</span>
       <h2>{{ p['name'] }}</h2>
       <div class="tags">
+        {% if out %}<span class="tag out">OUT</span>{% endif %}
         {% if p['mevushal'] == 'Yes' %}<span class="tag">Mevushal</span>{% endif %}
         {% if p['organic'] == 'Yes' %}<span class="tag">Organic</span>{% endif %}
       </div>
@@ -25,12 +30,13 @@
       <dl class="facts">
         {% for label, value in facts %}<dt>{{ label }}</dt><dd>{{ val(value) }}</dd>{% endfor %}
       </dl>
+      {% if live %}
       <div class="box">
-        <h3>Price and stock: {{ live.state }}</h3>
+        <h3>{{ 'Price' if live.list else 'Price and stock' }}: {{ live.state }}</h3>
         <div class="tw"><table>
           <tbody>
-            <tr><td>Regular price per case</td>{{ fig(live.price) }}</tr>
-            <tr><td>On hand (cases)</td>{{ fig(live.hand) }}</tr>
+            <tr><td>{{ 'List price' if live.list else 'Regular price per case' }}</td>{{ fig(live.price) }}</tr>
+            {% if live.hand %}<tr><td>On hand (cases)</td>{{ fig(live.hand) }}</tr>{% endif %}
           </tbody>
         </table></div>
         <ul class="asof">
@@ -39,8 +45,10 @@
             {% if s.as_of %}as of <time datetime="{{ s.as_of.iso }}">{{ s.as_of.text }}</time>{% else %}not read yet{% endif %}{% if s.stale and s.as_of %}. The latest read{% if s.tried %} (<time datetime="{{ s.tried.iso }}">{{ s.tried.text }}</time>){% endif %} did not succeed, so these are the last known figures{% endif %}.</li>
           {% endfor %}
         </ul>
-        <p class="meta">For salesmen only. On hand is information; it does not reserve stock.</p>
+        {% if live.list %}<p class="meta">Admins only: salesmen do not see this price. {% if live.edited %}Typed on the site by {{ live.edited.by }}{% if live.edited.at %}, <time datetime="{{ live.edited.at.iso }}">{{ live.edited.at.text }}</time>{% endif %}; the supplier's list printed {{ live.edited.was or 'no price' }}. {% else %}It is the price printed on the list, as the supplier gives it. {% endif %}Admins change it on the catalog page.</p>
+        {% else %}<p class="meta">For salesmen only. On hand is information; it does not reserve stock.</p>{% endif %}
       </div>
+      {% endif %}
     </div>
   </div>
 </div></main>

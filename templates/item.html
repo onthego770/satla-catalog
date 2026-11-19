@@ -3,9 +3,14 @@
 {% block title %}{{ 'Add' if adding else 'Edit' }} {{ p['sku'] }} · Satla Spirits{% endblock %}
 {% block body %}
 <main class="wrap"><div class="pad">
-  <div><a class="link" href="{{ url_for('admin_items') if adding else url_for('product', sku=p['sku']) }}">‹ Back without saving</a></div>
+  <div><a class="link" href="{{ url_for('product', sku=p['sku']) if shown else url_for('admin_items') }}">‹ Back without saving</a></div>
   <h2 class="title">{{ 'Add to catalog' if adding else 'Edit item' }} <span class="st">{{ p['sku'] }}</span></h2>
-  {% if adding %}<p class="meta">This item has no catalog entry yet. The name, bottle size and bottles per case below are what the inventory system holds; change them as you like, fill in the rest, and press Save.</p>{% endif %}
+  {% if scratch %}<p class="meta">A new item, from scratch: neither QuickBooks nor MMK holds item number {{ p['sku'] }} yet. Fill in the form and press Add to catalog. It shows in a state's catalog once that state's QuickBooks or MMK has the same item number; until then it is listed on Admin › Add items.</p>
+  {% elif adding %}<p class="meta">This item has no catalog entry yet. The name, bottle size and bottles per case below are what the inventory system holds; change them as you like, fill in the rest, and press Save.</p>{% endif %}
+  {% if source %}<p class="okbox" role="status">Filled in from <b>{{ source['name'] }}</b> ({{ source['sku'] }}{% if source_states %}, in the {{ source_states }} catalog{% endif %}): every detail, the description and the photo. {% if not scratch %}The name, bottle size and bottles per case are what the inventory system holds. {% endif %}Check them, change what differs, and press Add to catalog. <a class="link" href="{{ url_for('admin_item', sku=p['sku'], copy='', **({'new': 1} if scratch else {})) }}">Not the same item? Start blank</a></p>{% endif %}
+  {% if adding and matches %}<div class="box"><h3>{{ 'Other possible matches' if source else 'Maybe the same item, in the other catalog' }}</h3>
+    {% for m in matches %}<div class="srow"><a class="link" href="{{ url_for('admin_item', sku=p['sku'], copy=m['sku'], **({'new': 1} if scratch else {})) }}">Fill from {{ m['name'] }} ({{ m['sku'] }})</a> <span class="meta">{{ m['why'] }}</span></div>{% endfor %}
+  </div>{% endif %}
   {% for problem in problems %}<p class="alert" role="alert">{{ problem }}</p>{% endfor %}
   <div class="box" id="sourcebox" data-url="{{ url_for('admin_source') }}" data-find="{{ url_for('admin_source_find') }}" data-paste="{{ url_for('admin_source_paste') }}" data-csrf="{{ form_token() }}" data-sku="{{ p['sku'] }}">
     <h3>Find this item on Kosher Wine World, Kosher Wine Direct and KosherWine.com</h3>
@@ -34,7 +39,7 @@
     <div class="box" id="photobox" data-grid="{{ sizes['grid']|join('x') }}" data-detail="{{ sizes['detail']|join('x') }}">
       <h3>Photo</h3>
       <div class="ph{% if not has_photo %} noimg{% endif %}" id="photo-now">
-        <img {% if has_photo %}src="{{ url_for('photo', kind='detail', name=p['sku'] ~ '.webp', v=p['photo_v']) }}" {% endif %}alt="" width="900" height="1200">
+        <img {% if has_photo %}src="{{ url_for('photo', kind='detail', name=photo_sku ~ '.webp', v=photo_v) }}" {% endif %}alt="" width="900" height="1200">
         <div class="fb"><span>No photo</span></div>
       </div>
       <label class="field" for="photo-src">Choose a new picture<input class="inp" id="photo-src" type="file" accept="image/*"></label>
@@ -51,7 +56,7 @@
         <div class="fgrid">
         {% for col, label, kind, longest in fields %}
           {% set v = p[col] %}
-          <label class="field{% if kind == 'long' or col == 'name' %} wide{% endif %}" for="f-{{ col }}">{{ label }}
+          <label class="field{% if kind == 'long' or col == 'name' %} wide{% endif %}" for="f-{{ col }}">{{ 'Specs' if specs and col == 'size' else label }}
           {% if kind == 'long' %}<textarea class="inp" id="f-{{ col }}" name="{{ col }}" rows="6" maxlength="{{ longest }}">{{ v or '' }}</textarea>
           {% elif kind == 'yesno' %}<select class="inp" id="f-{{ col }}" name="{{ col }}">
             <option value=""{% if not v %} selected{% endif %}>(blank)</option>
@@ -65,7 +70,7 @@
             <span class="meta">Changing the name changes it in the catalog only. QuickBooks and MMK keep their own names.</span>
           {% elif col == 'category' %}<span class="meta">Category and Type decide where the item sits in the menu.</span>
           {% elif col == 'grape' %}<span class="meta">More than one: separate with commas.</span>
-          {% elif col == 'size' %}<span class="meta">For example 750 ml or 1.5 L.</span>
+          {% elif col == 'size' %}<span class="meta">{{ 'The pack or weight, as the price list gives it.' if specs else 'For example 750 ml or 1.5 L.' }}</span>
           {% elif col == 'mevushal' %}<span class="meta">A name with (M) or Mevushal always counts as Mevushal.</span>
           {% elif col == 'kfp' %}<span class="meta">Every Wine counts as Kosher for Passover, whatever is set here.</span>
           {% endif %}
@@ -81,7 +86,7 @@
         <h3>Delete from catalog</h3>
         <input type="hidden" name="csrf" value="{{ form_token() }}">
         <input type="hidden" name="action" value="delete">
-        <p class="meta">Removes the catalog entry and its photo from the site. Nothing is deleted in QuickBooks or MMK. It can be undone on the Item history page.</p>
+        <p class="meta">Removes the catalog entry and its photo from the site, and hides the item so it does not show as "Not in catalog" (Admin › Add items can show it again). Nothing is deleted in QuickBooks or MMK. It can be undone on the Item history page.</p>
         <label class="opt"><input type="checkbox" name="sure" value="1"><span>Yes, delete {{ p['name'] }} from the catalog</span></label>
         <div class="srow"><button class="btn" type="submit">Delete</button></div>
       </form>

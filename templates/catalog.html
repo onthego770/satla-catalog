@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Catalog · Satla Spirits{% endblock %}
 {% block body %}
-<main class="wrap"><div class="pad" id="view"><p class="meta">Loading the catalog…</p></div></main>
+<main class="wrap"><div class="pad" id="view"{% if pdf_url %} data-pdf-url="{{ pdf_url }}"{% endif %}{% if prices %} data-prices="1"{% endif %}{% if upload_url %} data-upload-url="{{ upload_url }}"{% endif %}{% if price_url %} data-price-url="{{ price_url }}" data-csrf="{{ form_token() }}"{% endif %}><p class="meta">Loading the catalog…</p></div></main>
 <div id="overlay"></div>
 <script id="pdata" type="application/json">{{ products|tojson }}</script>
 {% endblock %}

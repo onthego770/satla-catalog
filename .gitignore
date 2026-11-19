@@ -22,3 +22,9 @@ __pycache__/
 .DS_Store
 .claude/settings.local.json
 first-pass-*.json
+
+# Price-list PDFs made for download (catalog_pricelist.pdf_file); remade when needed.
+pdf-cache/
+
+# Suppliers' price lists uploaded by admins (catalog_pricelist.upload_read); data, not code.
+price-lists/

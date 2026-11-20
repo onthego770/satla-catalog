@@ -2,7 +2,20 @@
 {% set section = 'customers' %}
 {% block title %}{{ c['name'] }} · Satla Spirits{% endblock %}
 {% macro val(v) %}{% if v %}{{ v }}{% else %}<span class="meta">—</span>{% endif %}{% endmacro %}
+{% macro pill(s) %}{% if s %}<span class="tag s-{{ s }}">{{ words[s] }}</span>{% endif %}{% endmacro %}
+{% macro prod(x) %}<a href="{{ url_for('product', sku=x.sku) }}">{{ x.name }}</a>{% if x.p.out %} <span class="tag out">OUT</span>{% endif %}{% endmacro %}
+{% macro brow(m) %}
+        <div class="brow">
+          <span class="rk">{{ m.rank }}</span>
+          <div>{{ prod(m) }}<br><span class="meta">{{ m.cases|cs }} cs · last {{ m.last|shortday }} ·
+            {% if m.times > 1 %}usually {{ m.qty|cs }} cs every {{ m.cycle|span }}{% else %}{{ m.qty|cs }} cs, bought once{% endif %}
+            {%- if m.p.prev %} · last paid {{ m.p.prev.p|money }}{% endif %}
+            {%- if m.p.reg is none %} · cannot be ordered{% elif m.p.out %} · <b class="outnote">Out of stock</b>{% elif m.p.hand is not none %} · {{ m.p.hand }} cs on hand{% endif %}</span></div>
+          <span>{{ pill(m.status) }}</span>
+        </div>
+{% endmacro %}
 {% block body %}
+{% set f = brief.figures %}
 <main class="wrap"><div class="pad">
   <div><a class="link" href="{{ url_for('customers') }}">‹ {{ company_name }} customers</a></div>
   <div class="count">
@@ -12,9 +25,81 @@
     </div>
     <a class="btn pri" href="{{ url_for('order', company=c['company'], cid=c['id']) }}">New Order</a>
   </div>
+
+  {# What to sell: worked out from the QuickBooks invoices (catalog_insight.py) #}
+  <div class="kpis">
+    <div class="box"><h3>Last order</h3>
+      {% if f.last %}<div class="big">{% if f.since == 0 %}Today{% elif f.since == 1 %}Yesterday{% else %}{{ f.since }} days ago{% endif %}</div>
+      <span class="meta">{% if f.cycle %}Usually every {{ f.cycle|span }}{% else %}{{ f.last|shortday }}{% endif %} {{ pill(f.status if f.status != 'ok' else none) }}</span>
+      {% else %}<div class="big">None</div><span class="meta">No invoices in the last 2 years</span>{% endif %}
+    </div>
+    <div class="box"><h3>Sales this year</h3><div class="big">{{ f.ytd|money }}</div>
+      <span class="meta">{% if f.ytd_change is not none %}{{ '+' if f.ytd_change >= 0 else '' }}{{ f.ytd_change }}% against the same days last year ({{ f.ytd_before|money }}){% else %}Nothing in the same days last year{% endif %}</span>
+    </div>
+    <div class="box"><h3>Products bought lately</h3><div class="big">{{ f.active }}</div>
+      <span class="meta">In the last {{ rules.active_days }} days{% if f.peer_active is not none %} · {{ 'similar customers' if brief.peers.similar else 'other customers' }} average {{ f.peer_active|round|int }}{% endif %}</span>
+    </div>
+    <div class="box"><h3>Balance owed</h3><div class="big">{{ c['balance']|money }}</div>
+      <span class="meta">{% if f.open %}{{ f.open }} open {{ 'invoice' if f.open == 1 else 'invoices' }}, {{ 'the oldest ' if f.open > 1 else '' }}{{ f.open_oldest }} days old{% else %}No open invoices{% endif %}</span>
+    </div>
+  </div>
+
+  {% if brief.asks %}
+  <div class="box asks">
+    <h3>What to ask for today</h3>
+    <ol>
+      {% for a in brief.asks %}<li><b>{{ a.lead }}</b> {{ a.text }}</li>{% endfor %}
+    </ol>
+    {% if brief.due %}
+    <div><a class="btn" href="{{ url_for('order', company=c['company'], cid=c['id'], due=1) }}">Start an order with the {{ brief.due|length }} {{ 'product that is' if brief.due|length == 1 else 'products that are' }} due</a></div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if brief.bought %}
+  <div class="box">
+    <h3>What they buy: last 12 months, best seller first</h3>
+    <div>
+      {% for m in brief.bought[:8] %}{{ brow(m) }}{% endfor %}
+    </div>
+    {% if brief.bought|length > 8 %}
+    <details class="more"><summary>Show all {{ brief.bought|length }} products</summary>
+      <div>{% for m in brief.bought[8:] %}{{ brow(m) }}{% endfor %}</div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if brief.winbacks or brief.gaps or brief.new %}
+  <div class="trio">
+    {% if brief.winbacks %}
+    <div class="box"><h3>Win back: bought well, then stopped</h3>
+      {% for m in brief.winbacks %}
+      <div>{{ prod(m) }}<br><span class="meta">{{ m.cases_all|cs }} cs {{ m.months }} · last order {{ m.last|shortday }}, {{ m.since|span }} ago{% if m.p.prev %} · last paid {{ m.p.prev.p|money }}{% endif %}</span></div>
+      {% endfor %}
+      <span class="meta">Ask why they stopped: price, shelf space, or a competitor?</span>
+    </div>
+    {% endif %}
+    {% if brief.gaps %}
+    <div class="box"><h3>{{ 'Similar customers' if brief.peers.similar else 'Other customers' }} carry, they do not</h3>
+      {% for x in brief.gaps %}
+      <div>{{ prod(x) }}<br><span class="meta">Carried by {{ x.n }} of {{ x.of }} · about {{ x.each|round(1)|cs }} cs a year each · regular {{ x.p.reg|money }}</span></div>
+      {% endfor %}
+      <span class="meta">{% if brief.peers.similar %}Compared with the {{ brief.peers.n }} {{ company_name }} customers who bought within {{ (rules.peer_band * 100)|int }}% of this customer's cases over 12 months.{% else %}Compared with all {{ brief.peers.n }} {{ company_name }} customers who bought in the last 12 months.{% endif %}</span>
+    </div>
+    {% endif %}
+    {% if brief.new %}
+    <div class="box"><h3>New in {{ company_name }}</h3>
+      {% for x in brief.new %}
+      <div>{{ prod(x) }} <span class="tag new">NEW</span><br><span class="meta">First sold {{ x.first|shortday }} · regular {{ x.p.reg|money }}<br>{{ x.why }}</span></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <div class="cust">
     <div class="col">
-      <div class="box"><h3>Balance owed</h3><div class="big">{{ c['balance']|money }}</div></div>
       <div class="box"><h3>Address and contact</h3>
         <dl class="kv">
           <dt>Address</dt><dd>{{ val(address) }}</dd>
@@ -32,7 +117,7 @@
         {% for v in invoices %}
         <a class="rowbtn" href="{{ url_for('invoice', company=c['company'], iid=v.id) }}">
           <b>Invoice {{ v.doc_number }}</b>
-          <span class="meta">{{ v.date }} · {{ v.items }} {{ 'item' if v.items == 1 else 'items' }}</span>
+          <span class="meta">{{ v.date }} · {{ v['items'] }} {{ 'item' if v['items'] == 1 else 'items' }}</span>
           <span class="end">{{ v.total|money }}<br><span class="{{ 'open' if v.open else 'paid' }} small">{{ 'Open' if v.open else 'Paid' }}</span></span>
         </a>
         {% endfor %}

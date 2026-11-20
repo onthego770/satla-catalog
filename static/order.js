@@ -27,15 +27,16 @@
   P.forEach(p => { p.hay = norm([p.name, p.brand, p.grape, p.country, p.region, p.sku].join(" ")); });
 
   /* lines: {sku: {c: cases, p: price chosen or typed (absent = the default)}} */
-  const S = {lines: {}, note: "", q: "", cat: "all", screen: "order", copied: null, skipped: [], dialog: false, leaving: false};
+  const S = {lines: {}, note: "", q: "", cat: "all", screen: "order", copied: null, label: null, skipped: [], dialog: false, leaving: false};
 
   const saved = load(KEY);
   if (saved && saved.lines) {
     for (const [sku, l] of Object.entries(saved.lines)) if (bySku[sku] && bySku[sku].reg != null) S.lines[sku] = l;
-    S.note = saved.note || ""; S.copied = saved.copied || null; S.skipped = saved.skipped || [];
+    S.note = saved.note || ""; S.copied = saved.copied || null; S.label = saved.label || null; S.skipped = saved.skipped || [];
   }
   if (INFO.copy) {                       /* Copy Order replaces whatever was on the screen */
-    S.lines = {}; S.note = ""; S.copied = INFO.copy.doc; S.skipped = [];
+    /* `label` instead of an invoice: the order was started from the customer page's due products */
+    S.lines = {}; S.note = ""; S.copied = INFO.copy.doc || null; S.label = INFO.copy.label || null; S.skipped = [];
     for (const l of INFO.copy.lines) {
       const p = bySku[l.sku];
       if (p && p.reg != null && l.qty > 0) (S.lines[p.sku] = S.lines[p.sku] || {c: 0}).c = r2(S.lines[p.sku].c + l.qty);
@@ -44,7 +45,7 @@
     S.screen = "review";
     history.replaceState(null, "", location.pathname);      /* a reload must not copy again */
   }
-  function keep() { save(KEY, {lines: S.lines, note: S.note, copied: S.copied, skipped: S.skipped}); }
+  function keep() { save(KEY, {lines: S.lines, note: S.note, copied: S.copied, label: S.label, skipped: S.skipped}); }
 
   /* ---------- pricing ---------- */
   const startPrice = p => p.prev ? p.prev.p : p.reg;
@@ -102,8 +103,9 @@
     const ls = olines();
     let h = '<div class="subbar"><div><button class="link" type="button" data-act="add">‹ Add more products</button><h2>Review order</h2>' + who + "</div>" +
       '<button class="link" type="button" data-act="cancel">Cancel order</button></div><div class="wrap"><div class="pad">';
-    if (S.copied) {
-      h += '<div class="box" style="border-style:dashed"><span><b>Copied from invoice ' + esc(S.copied) + ".</b> Same products and quantities. Each price is today's default and can be changed.</span>" +
+    if (S.copied || S.label) {
+      h += '<div class="box" style="border-style:dashed"><span>' + (S.label ? "<b>" + esc(S.label) + ".</b> Each at this customer's usual quantity. Change or remove any line; each price is today's default and can be changed."
+        : "<b>Copied from invoice " + esc(S.copied) + ".</b> Same products and quantities. Each price is today's default and can be changed.") + "</span>" +
         (S.skipped.length ? "<span>" + plural(S.skipped.length, "line was", "lines were") + " left out because the product is not in the catalog or cannot be ordered: " + esc(S.skipped.join("; ")) + ".</span>" : "") + "</div>";
     }
     h += "<div>" + ls.map(l => '<div class="oline">' + photo(l.p.sku, l.p.pv) + "<div><h4>" + esc(l.p.name) + (l.p.out ? ' <span class="tag out">OUT</span>' : "") + '</h4><span class="meta">' + esc([l.p.sku, l.p.size].filter(Boolean).join(" · ")) + (l.p.out ? " · " + OUT : "") + "</span><br>" +

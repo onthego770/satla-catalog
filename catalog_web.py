@@ -38,6 +38,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import catalog_db as db
+import catalog_insight as insight
 import catalog_items as items
 import catalog_pricelist as pricelist
 import catalog_source as source
@@ -600,6 +601,58 @@ def _customer(company, cid):
     return c
 
 
+# --- What to sell (owner, 2026-11-19) -------------------------------------------
+# Worked out from the stored invoices each time a page is built; nothing is
+# typed in and nothing is stored. The rules are in catalog_insight.py.
+
+_BOOKS = {}          # {state: (the stamp of its invoice read, insight.book())}
+
+
+def _today():
+    """Today at the office (Central time)."""
+    return datetime.now(OFFICE_TZ).date()
+
+
+def _date(iso_date):
+    return datetime.strptime(iso_date, "%Y-%m-%d").date()
+
+
+def _book(company):
+    """insight.book() for one state's invoices, kept in this worker until the
+    refresh reads them again (sorting them out for every page view would be
+    wasted work on a small server)."""
+    stamp = db.snapshot(g.db, db.qbo_source(company))["attempted_at"]
+    held = _BOOKS.get(company)
+    if held is None or held[0] != stamp:
+        held = _BOOKS[company] = (stamp, insight.book(db.company_invoices(g.db, company)))
+    return held[1]
+
+
+def _brief(company, cid, today=None):
+    """insight.brief() for one customer: what they buy, what they stopped
+    buying, what similar customers carry, what is new, and what to ask for.
+    The products are the ones New Order offers (_order_products()), so what is
+    suggested is exactly what can be ordered."""
+    products = {p["sku"]: p for p in _order_products(company, cid)}
+    return insight.brief(_book(company), cid, products, today or _today())
+
+
+@app.template_filter("shortday")
+def shortday(day):
+    """A date as 'Aug 14', with the year when it is not this year."""
+    return day.strftime("%b %-d" if day.year == _today().year else "%b %-d, %Y")
+
+
+@app.template_filter("cs")
+def cs(value):
+    return _cases(value)
+
+
+@app.template_filter("span")
+def span(days):
+    return insight.span(days)
+
+
 @app.route("/customers")
 @login_required
 def customers():
@@ -607,9 +660,20 @@ def customers():
         return render_template("message.html", title="No customers here", message=(
             f"{_state_name(g.state)} is a price list to look at: it has no customers "
             "or orders on this site. Use the switch at the top for a state's customers."))
-    rows = [{"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
-             "st": r["state"]} for r in db.customers(g.db, g.state, _whose())]
+    # Beside each customer: how long ago the last order was and where the
+    # customer stands against its usual gap between orders (catalog_insight).
+    flags = insight.customer_flags(
+        {cid: [_date(d) for d in days] for cid, days in db.order_days(g.db, g.state).items()},
+        _today())
+    rows = []
+    for r in db.customers(g.db, g.state, _whose()):
+        f = flags.get(r["id"])
+        rows.append({"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
+                     "st": r["state"],
+                     **({"days": f["days"], "flag": f["status"],
+                         "rank": insight.ATTENTION[f["status"]]} if f else {})})
     return render_template("customers.html", customers=rows, mine=_whose() is not None,
+                           words=insight.STATUS_WORDS,
                            sources=_qbo_sources((g.state,)))
 
 
@@ -618,13 +682,17 @@ def customers():
 def customer(company, cid):
     _use_state(company)
     c = _customer(company, cid)
+    today = _today()
+    listed = (today - timedelta(days=insight.RULES["window_days"])).isoformat()
     invoices = [{"id": v["id"], "doc_number": v["doc_number"], "date": _day(v["txn_date"]),
                  "items": len(json.loads(v["lines"])), "total": v["total"],
                  "open": (v["balance"] or 0) > 0.004}
-                for v in db.customer_invoices(g.db, company, cid)]
+                for v in db.customer_invoices(g.db, company, cid, listed)]
     place = " ".join(x for x in (", ".join(x for x in (c["city"], c["state"]) if x), c["zip"]) if x)
     address = ", ".join(x for x in (c["street"], place) if x)
     return render_template("customer.html", c=c, address=address, invoices=invoices,
+                           brief=_brief(company, cid, today), words=insight.STATUS_WORDS,
+                           rules=insight.RULES, today=today,
                            company_name=_state_name(company),
                            sources=_qbo_sources((company,)))
 
@@ -702,7 +770,14 @@ def order(company, cid):
     c = _customer(company, cid)
     copy = None
     iid = request.args.get("copy")
-    if iid:
+    if request.args.get("due"):
+        # From the customer page's "Start an order": the products that are due,
+        # at their usual quantity. It uses the Copy Order path of order.js.
+        due = _brief(company, cid)["due"]
+        if due:
+            copy = {"doc": "", "label": "Started from the products that are due",
+                    "lines": due}
+    elif iid:
         v = db.invoice(g.db, company, iid)
         if v is None or v["customer_id"] != cid:
             abort(404)

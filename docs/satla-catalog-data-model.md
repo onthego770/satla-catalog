@@ -1,6 +1,6 @@
 # Satla Catalog — Master Spec (SOURCE OF TRUTH)
 
-Version 0.51 — 2026-11-19 — Draft
+Version 0.52 — 2026-11-19 — Draft
 
 ## How to use this document (for any chat in this Project)
 - This doc is the complete, authoritative record of the Satla catalog / rep ordering system design. It is NOT a summary. Read it before answering anything about the catalog, data model, architecture or requirements.
@@ -245,6 +245,7 @@ Version 0.51 — 2026-11-19 — Draft
 - Then build plan: daily check (MMK, two QBO companies, catalog database), database, order of construction.
 
 ## Change log
+- 2026-11-19 — v0.52 — (VPS working copy.) `qbo_invoices` now holds a little over two years of invoices (`catalog_live.HISTORY_DAYS` = 800; it was 365), so that "What to sell" can compare this year with last and find products a customer stopped buying. No new table and no new column: everything "What to sell" shows is worked out from `qbo_invoices` when a page is built (`catalog_insight.py`) and is not stored. The customer page still lists 12 months. New reads: `db.company_invoices()`, `db.order_days()`; `db.customer_invoices()` takes `since`.
 - 2026-11-19 — v0.51 — (VPS working copy.) Price-list snapshots: a price in `qbo_<st>` may be null (the list prints "TBD"). A price typed over on the upload page is stored like one typed on the catalog page: `edited` = {by, at, was}, `was` being what the list printed. Uploads live in `price-lists/` (not in git): `pending-<token>.pdf` with `.json` (the preview), `.choices`, `.loading`, `.report` while a load runs; `<state>-<list>-<day>.pdf` once loaded; `failed-<day>-<token>.pdf` for two weeks when a file does not read. The choices of a load: `sections`, `leave`, `skip`, `prices` ({sku: price or null}).
 - 2026-11-19 — v0.50 — (VPS working copy.) Each item of a price-list state's `extra_<st>` snapshot gains `printed`: what the supplier's last list printed about it (name, brand, section, specs, upc, certifier, as far as the layout prints them), so the next list shows what the supplier changed. Filled for the 98 MEAT items from the two PDFs loaded on 2026-11-18. Uploaded PDFs are kept in `price-lists/` (not in git). No table changed.
 - 2026-11-18 — v0.49 — (VPS working copy.) The MEAT tab. `products` gains `upc` (the catalog file gains a UPC column). The library's `STATES` gains a row MEAT with `inventory: "list"` (a supplier's price list held in Catalog.db: no QuickBooks company, no MMK) and the key `price_admin_only`; the `states` snapshot gains `price_list` and `price_admin_only`. For such a row the snapshots `qbo_<st>` / `inv_<st>` / `extra_<st>` hold the price list as last loaded by `manage.py load-price-list` (`catalog_pricelist.py`), and the refresh timer skips it. A price-list item's section is its `category` and its "Specs" its `size`.

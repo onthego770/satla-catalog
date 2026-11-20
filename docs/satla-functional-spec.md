@@ -1,6 +1,6 @@
 # Satla Catalog — Functional Spec (business functionality)
 
-Version 0.39 — 2026-11-19 — Draft
+Version 0.40 — 2026-11-19 — Draft
 
 ## How to use this document
 - This doc describes WHAT the application does for its users, release by release. The data behind it is in claude/satla-catalog-data-model.md (read that first; it is the master spec).
@@ -182,6 +182,7 @@ All customers, invoices, prices, bottles-per-case values and salesman names in t
 - Next: show the standardized photos in the wireframes (photo job, master spec section 6); settle the open items in section 7; then the build plan.
 
 ## Change log
+- 2026-11-19 — v0.40 — (VPS working copy.) "What to sell" on the customers list and the customer page. Dovid: "Ok, so I'm not so interested in the "Print" capability or feature - that's not the point. What I'm hoping is that while in the catalog, when the saleperson clicks on "Customer" (and sees their own customers), there is a bunch of helpful data they are presented with that helps them close a sale. These documents were my first attempt at extracting and presenting that data. Can you help me design and implement this functionality?" His earlier "Account Brief" spec (Drive folder "Catalog", `account-brief-handoff.zip`) was the starting point; printing is out at his word. Built from the stored QuickBooks invoices only: the customers list shows each customer's last order and a mark (Overdue, Due soon, Lapsed) with a "Needs attention first" order; the customer page shows four figures, up to three things to ask for today, what they buy with a status per product, win-backs, what similar customers carry and they do not, what is new in the state, and "Start an order with the products that are due". Not built (each needs typed data or a new read): deals, visit notes, buyer, best visit day, customer type, pending credits, talking points. The rules and every threshold are in CLAUDE.md, "What to sell", and in `catalog_insight.py`. Also fixed: the invoice list's item count.
 - 2026-11-15 — v0.18 — (VPS working copy.) Illinois and Florida kept completely apart (Dovid): state switch, allowed states per login, per-state catalog / customers / orders; new library functions get_current_inventory(state) and get_regular_prices(state). Replaces "one combined catalog, no state picker".
 - 2026-11-15 — v0.19 — (VPS working copy.) Recorded Dovid's words on Florida: "Any items not in the QBO FL inventory are no longer avail". No code change; the question of QuickBooks Florida items with no catalog entry stays open (section 0).
 - 2026-11-15 — v0.20 — (VPS working copy.) Kosher labels removed (everything is kosher), Mevushal label kept, "Kosher for Passover" label removed and made a menu category (Dovid, section 0).

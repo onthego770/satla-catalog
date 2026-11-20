@@ -37,8 +37,8 @@ Tables:
                  pages show its "as of" time. Nothing here is ever written back to
                  QuickBooks or MMK.
   qbo_customers  The LAST READ of each QuickBooks company's customers (name,
-  qbo_invoices   address, contact, balance, salesman) and of its invoices for the last 12
-                 months with their line items. Also a cache of a read: the same
+  qbo_invoices   address, contact, balance, salesman) and of its invoices for a little
+                 over two years (catalog_live.HISTORY_DAYS) with their line items. Also a cache of a read: the same
                  timer replaces both tables, per company, each time it runs.
   qbo_last_prices  What each customer last paid per case for each product: the
                  most recent QuickBooks invoice, however old, that includes it.
@@ -552,12 +552,31 @@ def salesman_counts(con):
     return out
 
 
-def customer_invoices(con, company, cid):
-    """A customer's invoices, newest first."""
+def customer_invoices(con, company, cid, since=""):
+    """A customer's invoices, newest first; `since` ('YYYY-MM-DD') leaves out
+    the older ones (the table holds a little over two years; the customer page
+    lists twelve months)."""
     return con.execute(
-        "SELECT * FROM qbo_invoices WHERE company = ? AND customer_id = ? "
+        "SELECT * FROM qbo_invoices WHERE company = ? AND customer_id = ? AND txn_date >= ? "
         "ORDER BY txn_date DESC, CAST(doc_number AS INTEGER) DESC",
-        (company, cid)).fetchall()
+        (company, cid, since)).fetchall()
+
+
+def company_invoices(con, company):
+    """Every stored invoice of one state's QuickBooks company, with its lines:
+    what catalog_insight.book() is built from."""
+    return con.execute("SELECT customer_id, txn_date, total, balance, doc_number, lines "
+                       "FROM qbo_invoices WHERE company = ?", (company,)).fetchall()
+
+
+def order_days(con, company):
+    """{customer_id: [the day of each of its stored invoices, 'YYYY-MM-DD']} for
+    one state, for the customers list (catalog_insight.customer_flags())."""
+    out = {}
+    for r in con.execute("SELECT customer_id, txn_date FROM qbo_invoices "
+                         "WHERE company = ? AND total > 0", (company,)):
+        out.setdefault(r["customer_id"], []).append(r["txn_date"])
+    return out
 
 
 def invoice(con, company, iid):

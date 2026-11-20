@@ -35,7 +35,10 @@ from pathlib import Path
 import catalog_db as db
 
 LIBRARY = Path.home() / "python" / "qbo_scripts"
-HISTORY_DAYS = 365          # order history: QuickBooks invoices, last 12 months
+HISTORY_DAYS = 800          # invoices kept: a little over two years, so that "this year
+                            # against the same days last year" and "bought well, then
+                            # stopped" can be worked out (catalog_insight.py). The
+                            # customer page still LISTS the last 12 months.
 ALL_INVOICES_FROM = "2000-01-01"   # previous prices use every invoice, however old
 # The customer custom field in QuickBooks that names the customer's salesman.
 # A company that has no such field gives every customer a blank salesman.
@@ -87,7 +90,7 @@ def read_company(state, qb, skus):
     or the shipping address when there is no billing one, and `salesman` is the
     customer's SALESMAN custom field ('' when blank); an invoice carries its
     product lines as [{sku, name, qty, price, amount}], exactly as QuickBooks
-    holds them. `invoices` covers the last 12 months only.
+    holds them. `invoices` covers the last HISTORY_DAYS days only.
 
     `last_prices` is {(customer_id, sku): (price, 'YYYY-MM-DD')}: for each
     customer and each of those items, the price per case on the most recent invoice

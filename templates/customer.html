@@ -40,6 +40,7 @@
       <span class="meta">In the last {{ rules.active_days }} days{% if f.peer_active is not none %} · {{ 'similar customers' if brief.peers.similar else 'other customers' }} average {{ f.peer_active|round|int }}{% endif %}</span>
     </div>
     <div class="box"><h3>Balance owed</h3><div class="big">{{ c['balance']|money }}</div>
+      {% if (c['overdue'] or 0) > 0.004 %}<span class="late">Past due: {{ c['overdue']|money }}</span>{% elif (c['balance'] or 0) > 0.004 %}<span class="meta">Past due: {{ 0|money }}</span>{% endif %}
       <span class="meta">{% if f.open %}{{ f.open }} open {{ 'invoice' if f.open == 1 else 'invoices' }}, {{ 'the oldest ' if f.open > 1 else '' }}{{ f.open_oldest }} days old{% else %}No open invoices{% endif %}</span>
     </div>
   </div>

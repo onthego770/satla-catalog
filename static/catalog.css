@@ -270,3 +270,10 @@ a.btn{text-decoration:none}
   .kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
   .trio{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
 }
+/* customers list: the part of what a customer owes that is past its due date */
+.rowbtn .late,.kpis .late{color:var(--stop);font-weight:600;font-size:.86em;white-space:nowrap}
+/* customers list: the dashboard above it (totals owed and past due, top opportunities) */
+.board{margin-bottom:14px}
+.kpis.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.big.stop{color:var(--stop)}
+.board .list .rowbtn:last-child{border-bottom:0}

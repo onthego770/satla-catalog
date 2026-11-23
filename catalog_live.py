@@ -116,10 +116,21 @@ def read_company(state, qb, skus):
                           "phone": c["phone"], "email": c["email"], "balance": c["balance"],
                           "salesman": custom.get(c["id"], {}).get(SALESMAN_FIELD, ""),
                           **addr})
-    invoices, last_prices = [], {}
+    invoices, last_prices, overdue, opened = [], {}, {}, {}
     cutoff = since.strftime("%Y-%m-%d")
+    today = date.today().isoformat()
     for o in qbo.build_orders(raw_invoices, "", sku_map):       # oldest first
         day = o["date"].strftime("%Y-%m-%d")
+        # Overdue: what is still open on an invoice whose QuickBooks due date
+        # has passed (an invoice with no due date is due on its own day). Every
+        # invoice counts, however old, not only the ones kept below.
+        owed, cid = _num(o["balance"]) or 0.0, str(o["customer_id"])
+        if owed > 0.004:
+            opened[cid] = opened.get(cid, 0) + 1
+            due = o["due"] or day
+            if due < today:                 # [amount, invoices, the earliest due date]
+                was = overdue.get(cid, [0.0, 0, due])
+                overdue[cid] = [was[0] + owed, was[1] + 1, min(was[2], due)]
         for ln in o["lines"]:
             price = _num(ln["price"])
             if ln["sku"] in items and price and price > 0:
@@ -133,6 +144,13 @@ def read_company(state, qb, skus):
             "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": _num(ln["qty"]),
                        "price": _num(ln["price"]), "amount": _num(ln["amount"])}
                       for ln in o["lines"]]})
+    for c in customers:
+        # never more than the customer owes in all (a credit can stand against it)
+        late = overdue.get(str(c["id"]), [0.0, 0, None])
+        c["overdue"] = round(max(0.0, min(late[0], _num(c["balance"]) or 0.0)), 2)
+        # how many invoices are open, how many of them are past due, and the
+        # due date of the one that has been past due the longest
+        c["open_n"], c["overdue_n"], c["overdue_since"] = opened.get(str(c["id"]), 0), late[1], late[2]
     return items, customers, invoices, last_prices
 
 

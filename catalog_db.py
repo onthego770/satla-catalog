@@ -124,7 +124,11 @@ CREATE TABLE IF NOT EXISTS qbo_customers (
     contact TEXT,
     phone   TEXT,
     email   TEXT,
-    balance REAL,
+    balance REAL,                   -- what the customer owes in all (QuickBooks' own figure)
+    overdue REAL,                   -- the part of it on invoices past their due date, as of the last read
+    open_n  INTEGER,                -- open invoices (every invoice, however old)
+    overdue_n INTEGER,              -- ... of which past their due date
+    overdue_since TEXT,             -- the earliest due date among those (YYYY-MM-DD), or NULL
     salesman TEXT,                  -- the customer's SALESMAN custom field in QuickBooks ('' = not set)
     PRIMARY KEY (company, id)
 );
@@ -236,6 +240,12 @@ def init():
         if "salesman" not in {r["name"] for r in con.execute("PRAGMA table_info(qbo_customers)")}:
             # Filled by the next refresh; until then only admins see customers.
             con.execute("ALTER TABLE qbo_customers ADD COLUMN salesman TEXT")
+        if "overdue" not in {r["name"] for r in con.execute("PRAGMA table_info(qbo_customers)")}:
+            # Filled by the next refresh; until then the list shows no past-due figure.
+            con.execute("ALTER TABLE qbo_customers ADD COLUMN overdue REAL")
+        for col, kind in (("open_n", "INTEGER"), ("overdue_n", "INTEGER"), ("overdue_since", "TEXT")):
+            if col not in {r["name"] for r in con.execute("PRAGMA table_info(qbo_customers)")}:
+                con.execute(f"ALTER TABLE qbo_customers ADD COLUMN {col} {kind}")
         # The Illinois on-hand read used to be stored as 'mmk_il'; it is 'inv_il' now.
         con.execute("DELETE FROM live_snapshot WHERE source = 'mmk_il'")
     con.close()
@@ -500,9 +510,12 @@ def replace_company(con, company, customers, invoices, last_prices):
             [(company, cid, sku, price, day) for (cid, sku), (price, day) in last_prices.items()])
         con.executemany(
             "INSERT INTO qbo_customers (company, id, name, street, city, state, zip, "
-            "contact, phone, email, balance, salesman) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "contact, phone, email, balance, overdue, open_n, overdue_n, overdue_since, "
+            "salesman) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(company, c["id"], c["name"], c["street"], c["city"], c["state"], c["zip"],
-              c["contact"], c["phone"], c["email"], c["balance"], c.get("salesman") or "")
+              c["contact"], c["phone"], c["email"], c["balance"], c.get("overdue"),
+              c.get("open_n"), c.get("overdue_n"), c.get("overdue_since"),
+              c.get("salesman") or "")
              for c in customers])
         con.executemany(
             "INSERT INTO qbo_invoices (company, id, doc_number, customer_id, txn_date, "
@@ -522,7 +535,9 @@ def customers(con, company, salesman=None):
     (an admin) = every customer; a name = only the customers whose SALESMAN field
     in QuickBooks is that name (the owner, 2026-11-15: "Each salesman should see
     only their own customers"). A customer with no SALESMAN belongs to nobody."""
-    rows = con.execute("SELECT company, id, name, city, state, salesman FROM qbo_customers "
+    rows = con.execute("SELECT company, id, name, city, state, salesman, balance, overdue, "
+                       "open_n, overdue_n, overdue_since "
+                       "FROM qbo_customers "
                        "WHERE company = ?", (company,)).fetchall()
     if salesman is not None:
         key = salesman_key(salesman)

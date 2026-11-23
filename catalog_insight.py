@@ -39,6 +39,7 @@ RULES = {
     "gap_share": 0.25,        # a gap: carried by at least a quarter of the similar customers
     "gap_min_peers": 2,       # ... and by at least two of them
     "top": 5,                 # best sellers that count as "top"
+    "opportunities": 5,       # sales opportunities shown above the customers list
     "asks": 3, "winbacks": 3, "gaps": 3, "new": 2,     # how many of each are shown
 }
 
@@ -151,6 +152,39 @@ def customer_flags(order_days, today):
         out[cid] = {"last": days[-1], "days": since, "cycle": cycle,
                     "status": status(since, cycle)}
     return out
+
+
+def opportunities(orders, ids, today):
+    """The customers most worth a call today, best first, for the top of the
+    customers list (the owner, 2026-11-23: "Top 5 sales opportunities based on
+    overdue, $$, and chance to close a sale base on schudule").
+
+    A customer counts when its own rhythm says an order is DUE or OVERDUE (a
+    Lapsed customer is a win-back, not a likely sale, and is left out). Each is
+    worth its usual order (the median invoice total of the last 12 months, else
+    of every stored invoice) times the chance its schedule gives: full while
+    the customer is inside RULES['overdue'] gaps, then falling as the gaps go
+    by (1.25 gaps late = 1, 2.5 gaps = a half).
+
+    `orders` is book()['orders']; `ids` the customers to look at. Returns up to
+    RULES['opportunities'] of {id, status, days, cycle, usual, score}."""
+    since_day = today - timedelta(days=RULES["window_days"])
+    out = []
+    for cid in ids:
+        sold = [(d, t) for d, t, _b, _n in orders.get(cid, ()) if t > 0]
+        if not sold:
+            continue
+        days = sorted({d for d, _t in sold})
+        since, cycle = max(0, (today - days[-1]).days), rhythm(days)
+        st = status(since, cycle)
+        if st not in (OVERDUE, DUE):
+            continue
+        usual = median([t for d, t in sold if d >= since_day] or [t for _d, t in sold])
+        chance = min(1.0, RULES["overdue"] * cycle / since)
+        out.append({"id": cid, "status": st, "days": since, "cycle": cycle,
+                    "usual": usual, "score": usual * chance})
+    out.sort(key=lambda r: -r["score"])
+    return out[:RULES["opportunities"]]
 
 
 def brief(bk, cid, products, today):

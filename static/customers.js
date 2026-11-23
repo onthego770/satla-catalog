@@ -2,32 +2,40 @@
    customers: the state the header switch is on (for a salesman, only their own).
    Each row shows how long ago the customer last ordered and, when the customer
    is past its usual gap between orders, a mark (worked out on the server:
-   catalog_insight.py). "Needs attention first" puts those on top. */
+   catalog_insight.py). "Needs attention first" puts those on top. Under it: what
+   the customer owes and how much of that is past due (from the last QuickBooks read). */
 "use strict";
 (function () {
-  const {esc, norm, wordsMatch, load, save} = window.Satla;
+  const {esc, norm, wordsMatch, load, save, money} = window.Satla;
   const C = JSON.parse(document.getElementById("cdata").textContent);
   const view = document.getElementById("view");
   const KEY = "satla.customers.v2." + document.body.dataset.state;
   C.forEach(c => { c.hay = norm(c.name + " " + c.city); });
   const saved = load(KEY) || {};
-  const S = {q: saved.q || "", sort: saved.sort === "due" ? "due" : "az"};
+  const S = {q: saved.q || "", sort: ["due", "late"].includes(saved.sort) ? saved.sort : "az"};
   const WORDS = JSON.parse(view.dataset.words || "{}");
   const ago = d => d === 0 ? "today" : d === 1 ? "yesterday" : d < 60 ? d + " days ago" : d < 730 ? Math.round(d / 30.44) + " months ago" : "over 2 years ago";
   /* overdue, then due soon, then lapsed, then on track, then no orders; inside each, the
      most recent buyer first (a weekly customer two weeks late comes before a yearly one) */
   const byNeed = (a, b) => (a.rank == null ? 9 : a.rank) - (b.rank == null ? 9 : b.rank) || (a.days || 0) - (b.days || 0) || a.name.localeCompare(b.name);
+  /* what the customer owes in all (QuickBooks' balance) and the part of it on invoices
+     past their due date; nothing when the customer owes nothing */
+  function owes(c) {
+    if (!(c.bal > 0.004)) return c.bal < -0.004 ? '<br><span class="meta">Credit ' + money(-c.bal) + "</span>" : "";
+    return '<br><span class="meta">Owes ' + money(c.bal) + "</span>" + (c.late > 0.004 ? ' <span class="late">' + money(c.late) + " past due</span>" : "");
+  }
   function end(c) {
-    if (c.days == null) return '<span class="end meta">No orders in 2 years</span>';
-    return '<span class="end">' + (c.flag && c.flag !== "ok" ? '<span class="tag s-' + c.flag + '">' + esc(WORDS[c.flag]) + "</span><br>" : "") + '<span class="meta">Last order ' + ago(c.days) + "</span></span>";
+    return '<span class="end">' + (c.flag && c.flag !== "ok" ? '<span class="tag s-' + c.flag + '">' + esc(WORDS[c.flag]) + "</span><br>" : "") + '<span class="meta">' + (c.days == null ? "No orders in 2 years" : "Last order " + ago(c.days)) + "</span>" + owes(c) + "</span>";
   }
 
   function html() {
     const list = C.filter(c => wordsMatch(c.hay, S.q));
     if (S.sort === "due") list.sort(byNeed);
+    /* the most past due first; then the rest by what they owe, then by name */
+    if (S.sort === "late") list.sort((a, b) => (b.late || 0) - (a.late || 0) || (b.bal || 0) - (a.bal || 0) || a.name.localeCompare(b.name));
     let h = '<div class="srow"><input class="inp" id="cq" type="search" placeholder="Search customers by name or city" value="' + esc(S.q) + '" aria-label="Search customers" enterkeyhint="search"></div>' +
       '<div class="count"><span class="meta">' + list.length + " of " + C.length + ' customers</span><span class="chips" role="group" aria-label="Order of the list">' +
-      [["az", "A to Z"], ["due", "Needs attention first"]].map(k => '<button class="chip" type="button" data-sort="' + k[0] + '" aria-pressed="' + (S.sort === k[0]) + '">' + k[1] + "</button>").join("") + "</span></div>";
+      [["az", "A to Z"], ["due", "Needs attention first"], ["late", "Past Due"]].map(k => '<button class="chip" type="button" data-sort="' + k[0] + '" aria-pressed="' + (S.sort === k[0]) + '">' + k[1] + "</button>").join("") + "</span></div>";
     /* a salesman sees only the customers with their name in QuickBooks' SALESMAN field */
     if (!C.length && view.dataset.mine) return h + '<div class="empty"><b>No customers in this state are under your name.</b><br>A customer shows here when its SALESMAN field in QuickBooks is your name. Ask the office if one is missing.</div>';
     if (!C.length) return h + '<div class="empty"><b>No customers have been read yet.</b><br>They are read from QuickBooks every 30 minutes.</div>';

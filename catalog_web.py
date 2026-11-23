@@ -665,14 +665,33 @@ def customers():
     flags = insight.customer_flags(
         {cid: [_date(d) for d in days] for cid, days in db.order_days(g.db, g.state).items()},
         _today())
-    rows = []
-    for r in db.customers(g.db, g.state, _whose()):
+    rows, seen = [], db.customers(g.db, g.state, _whose())
+    # Above the list: what these customers owe in all, what is past due, and
+    # the customers most worth a call today (catalog_insight.opportunities()).
+    owing = [r for r in seen if (r["balance"] or 0) > 0.004]
+    late = [r for r in seen if (r["overdue"] or 0) > 0.004]
+    names = {r["id"]: r for r in seen}
+    board = {
+        "due": sum(r["balance"] for r in owing), "due_customers": len(owing),
+        "open_n": sum(r["open_n"] or 0 for r in owing),
+        "late": sum(r["overdue"] for r in late), "late_customers": len(late),
+        "late_n": sum(r["overdue_n"] or 0 for r in late),
+        "late_since": _date(min(r["overdue_since"] for r in late if r["overdue_since"]))
+                      if any(r["overdue_since"] for r in late) else None,
+        "asks": [{**o, "name": names[o["id"]]["name"], "city": names[o["id"]]["city"],
+                  "late": names[o["id"]]["overdue"] or 0}
+                 for o in insight.opportunities(_book(g.state)["orders"], list(names), _today())],
+    }
+    for r in seen:
         f = flags.get(r["id"])
         rows.append({"co": r["company"], "id": r["id"], "name": r["name"], "city": r["city"],
                      "st": r["state"],
+                     # what the customer owes in all, and the part of it past due
+                     "bal": round(r["balance"] or 0, 2), "late": round(r["overdue"] or 0, 2),
                      **({"days": f["days"], "flag": f["status"],
                          "rank": insight.ATTENTION[f["status"]]} if f else {})})
     return render_template("customers.html", customers=rows, mine=_whose() is not None,
+                           board=board,
                            words=insight.STATUS_WORDS,
                            sources=_qbo_sources((g.state,)))
 

@@ -3,6 +3,29 @@
 {% block title %}{{ g.states[g.state]['name'] }} customers · Satla Spirits{% endblock %}
 {% block body %}
 <main class="wrap"><div class="pad">
+  {% if customers %}
+  <div class="col board">
+    <div class="kpis two">
+      <div class="box"><h3>Total due</h3><div class="big">{{ board.due|money }}</div>
+        <span class="meta">{{ board.open_n }} open {{ 'invoice' if board.open_n == 1 else 'invoices' }} · {{ board.due_customers }} {{ 'customer' if board.due_customers == 1 else 'customers' }}</span>
+      </div>
+      <div class="box"><h3>Past due</h3><div class="big{% if board.late > 0 %} stop{% endif %}">{{ board.late|money }}</div>
+        <span class="meta">{% if board.late_n %}{{ board.late_n }} past-due {{ 'invoice' if board.late_n == 1 else 'invoices' }} · {{ board.late_customers }} {{ 'customer' if board.late_customers == 1 else 'customers' }}{% if board.late_since %} · since {{ board.late_since.strftime('%b %-d, %Y') }}{% endif %}{% else %}No past-due invoices{% endif %}</span>
+      </div>
+    </div>
+    {% if board.asks %}
+    <div class="box"><h3>Top {{ board.asks|length }} sales opportunities</h3>
+      <div class="list">
+      {% for a in board.asks %}
+        <a class="rowbtn" href="/customer/{{ g.state }}/{{ a.id|urlencode }}"><b>{{ loop.index }}. {{ a.name }}</b>
+          <span class="meta">Orders about every {{ a.cycle|span }} · last order {{ a.days|span }} ago · usual order {{ a.usual|money }}</span>
+          <span class="end"><span class="tag s-{{ a.status }}">{{ words[a.status] }}</span>{% if a.late > 0.004 %}<br><span class="late">{{ a.late|money }} past due</span>{% endif %}</span></a>
+      {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
   <div id="view" class="col"{% if mine %} data-mine="1"{% endif %} data-words="{{ words|tojson|forceescape }}"><p class="meta">Loading customers…</p></div>
   {% include "_qbo_asof.html" %}
 </div></main>

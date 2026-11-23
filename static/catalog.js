@@ -53,20 +53,26 @@
      to the same search, menu, filters and scroll position ---------- */
   const KEY = "satla.catalog.v2." + document.body.dataset.state;   /* each state keeps its own search and filters */
   const wideQuery = window.matchMedia("(min-width:700px)");
-  const S = {q: "", menu: "all", sub: null, f: blankF(), openF: {country: true}, drawer: false, wide: wideQuery.matches, scroll: 0};
+  /* `secs`: the sections ticked on a price list's menu. They add up (the owner,
+     2026-11-22: "other than "All" ... all the other buttons can be accummulated");
+     none ticked is All. */
+  const S = {q: "", menu: "all", secs: [], sub: null, f: blankF(), openF: {country: true}, drawer: false, wide: wideQuery.matches, scroll: 0};
   const saved = load(KEY);
   if (saved) {
     S.q = saved.q || ""; S.sub = saved.sub || null; S.scroll = saved.scroll || 0;
     if (MENU.some(m => m[0] === saved.menu)) S.menu = saved.menu;
+    const had = Array.isArray(saved.secs) ? saved.secs : [];
+    if (S.menu.startsWith(SECTION)) { had.push(S.menu.slice(SECTION.length)); S.menu = "all"; }   /* a tab saved before sections added up */
+    S.secs = had.filter(x => MENU.some(m => m[0] === SECTION + x));
     /* only the filters that exist today: a tab saved earlier may hold others */
     for (const k in S.f) if (saved.f && Array.isArray(saved.f[k])) S.f[k] = saved.f[k];
     Object.assign(S.openF, saved.openF || {});
   }
-  function save() { store(KEY, {q: S.q, menu: S.menu, sub: S.sub, f: S.f, openF: S.openF, scroll: window.scrollY}); }
+  function save() { store(KEY, {q: S.q, menu: S.menu, secs: S.secs, sub: S.sub, f: S.f, openF: S.openF, scroll: window.scrollY}); }
 
   /* ---------- catalog logic ---------- */
   function menuMatch(p) {
-    if (S.menu.startsWith(SECTION)) return p.cat === S.menu.slice(SECTION.length);
+    if (S.secs.length && S.menu === "all") return S.secs.includes(p.cat);
     switch (S.menu) {
       case "wine": return p.cat === "Wine" && (!S.sub || p.type === S.sub);
       case "spirits": return p.cat === "Spirits" && (!S.sub || p.type === S.sub);
@@ -128,7 +134,7 @@
     const base = baseList(), res = base.filter(p => fMatch(p));
     const listView = S.menu === "brands" || S.menu === "countries";
     let h = '<div class="srow"><input class="inp" id="q" type="search" data-in="q" placeholder="' + (LIST ? "Search name, section, item number" : "Search name, brand, grape, country, region") + '" value="' + esc(S.q) + '" aria-label="Search products" enterkeyhint="search"></div>';
-    h += '<div class="chips" id="menu" role="group" aria-label="Browse menu">' + MENU.map(m => '<button class="chip" data-act="menu" data-m="' + esc(m[0]) + '" aria-pressed="' + (S.menu === m[0]) + '">' + esc(m[1]) + "</button>").join("") + "</div>";
+    h += '<div class="chips" id="menu" role="group" aria-label="Browse menu">' + MENU.map(m => '<button class="chip" data-act="menu" data-m="' + esc(m[0]) + '" aria-pressed="' + (m[0].startsWith(SECTION) ? S.menu === "all" && S.secs.includes(m[0].slice(SECTION.length)) : S.menu === m[0] && !(m[0] === "all" && S.secs.length)) + '">' + esc(m[1]) + "</button>").join("") + "</div>";
     if (SUB[S.menu]) h += '<div class="chips" id="submenu" role="group" aria-label="' + S.menu + ' types"><button class="chip" data-act="sub" data-s="" aria-pressed="' + (!S.sub) + '">All ' + (S.menu === "wine" ? "wine" : "spirits") + "</button>" + SUB[S.menu].map(s => '<button class="chip" data-act="sub" data-s="' + esc(s) + '" aria-pressed="' + (S.sub === s) + '">' + s + "</button>").join("") + "</div>";
     if (listView) {
       const key = S.menu === "brands" ? "brand" : "country", m = new Map();
@@ -247,9 +253,15 @@
     const b = e.target.closest("[data-act]"); if (!b) return;
     const d = b.dataset;
     switch (d.act) {
-      case "menu": S.menu = d.m; S.sub = null; render(); break;
+      case "menu":
+        if (d.m.startsWith(SECTION)) {             /* a section is added to, or taken from, those shown */
+          const x = d.m.slice(SECTION.length);
+          S.secs = S.menu === "all" && S.secs.includes(x) ? S.secs.filter(y => y !== x) : (S.menu === "all" ? S.secs : []).concat(x);
+          S.menu = "all";
+        } else { S.menu = d.m; S.secs = []; }
+        S.sub = null; render(); break;
       case "sub": S.sub = d.s || null; render(); break;
-      case "pick": S.f = blankF(); S.f[d.k] = [d.v]; S.menu = "all"; S.sub = null; S.openF[d.k] = true; render(); window.scrollTo(0, 0); break;
+      case "pick": S.f = blankF(); S.f[d.k] = [d.v]; S.menu = "all"; S.secs = []; S.sub = null; S.openF[d.k] = true; render(); window.scrollTo(0, 0); break;
       case "drawer": S.drawer = true; render(); break;
       case "closedrawer": if (e.target === b || d.x) { S.drawer = false; render(); } break;
       case "clear": S.f = blankF(); render(); break;

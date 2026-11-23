@@ -348,20 +348,39 @@ def _printed(row):
     return {key: row[key] for key, _col, _label in PRINTED if row.get(key) is not None}
 
 
-def _follows(entry, before, row):
+def _site_sections(con, extra, name):
+    """What the site calls each section the list `name` prints: {the list's
+    heading: the section most of its items stand under here}. A section
+    renamed on the site (the owner, 2026-11-22: "rename Retail -> Retail Deli,
+    and Deli to Bulk Deli") keeps its new name when a newer list is loaded: a
+    new item, or one the supplier moved, goes under the site's name for the
+    heading it is printed under."""
+    seen = {}
+    for sku, v in extra.items():
+        printed = (v.get("printed") or {}).get("section")
+        entry = db.product(con, sku) if printed and v.get("list") == name else None
+        if entry is not None and entry["category"]:
+            seen.setdefault(printed, []).append(entry["category"])
+    return {printed: max(dict.fromkeys(have), key=have.count) for printed, have in seen.items()}
+
+
+def _follows(entry, before, row, sections=None):
     """The supplier's changes to one item that has a catalog entry: a list of
     {field, label, have, list, edited}, one for each thing the list now prints
     differently from its last issue (`before`, the kept `printed`) and that the
     entry does not already say. `edited`: the entry no longer holds what the
     last issue printed (an admin changed it on the site). With no record of
-    the last issue nothing is called a change: the entry is left as it is."""
+    the last issue nothing is called a change: the entry is left as it is.
+    `sections` (_site_sections()) gives a section the name the site uses."""
     out = []
     for key, col, label in PRINTED:
         new = row.get(key)
         if new is None or not before or key not in before:
             continue
-        have = entry[col] or ""
-        if (before[key] or "") != (new or "") and have != (new or ""):
+        have, changed = entry[col] or "", (before[key] or "") != (new or "")
+        if key == "section":
+            new = (sections or {}).get(new, new)
+        if changed and have != (new or ""):
             out.append({"field": key, "label": label, "have": have, "list": new or "",
                         "edited": have != (before[key] or "")})
     return out
@@ -437,11 +456,12 @@ def compare(con, state, name, rows):
            "items": [], "details": [], "photos": [],
            "sections": list(dict.fromkeys(r["category"] or "Other" for r in ordered(con, state)))}
     mine = [p for p in db.state_products(con, state) if p["sku"] in before]
+    names = _site_sections(con, extra, name)
     for r in rows:
         entry, same = db.product(con, r["sku"]), True
         if entry is None:
             out["new"].append({"sku": r["sku"], "name": r["name"], "specs": r["specs"], "upc": r["upc"],
-                               "price": r["price"], "section": r["section"],
+                               "price": r["price"], "section": names.get(r["section"], r["section"]),
                                "suggest": None if r["section"] else _section_for(r, mine),
                                "picture": bool(r["picture"])})
             continue
@@ -454,7 +474,7 @@ def compare(con, state, name, rows):
             out["prices"].append({"sku": r["sku"], "name": entry["name"], "old": old.get("price"),
                                   "new": r["price"]})
             same = False
-        changes = _follows(entry, (extra.get(r["sku"]) or {}).get("printed"), r)
+        changes = _follows(entry, (extra.get(r["sku"]) or {}).get("printed"), r, names)
         if changes:
             out["details"].append({"sku": r["sku"], "name": entry["name"], "changes": changes})
             same = False
@@ -530,20 +550,21 @@ def load(con, state, rows, user, name, photos=None, log=print, choices=None):
             raise ValueError(f"{sku}: {problem}")
 
     columns = [d[0] for d in con.execute("SELECT * FROM products LIMIT 0").description]
+    names = _site_sections(con, old_extra, name)
     added, kept, updated = [], [], 0
     for r in rows:
         entry, photo = db.product(con, r["sku"]), (photos or {}).get(r["sku"])
         if entry is None:
             row = dict(dict.fromkeys(columns), sku=r["sku"], name=r["name"], brand=r["brand"],
-                       category=r["section"] or sections.get(r["sku"]) or "Other",
+                       category=names.get(r["section"], r["section"]) or sections.get(r["sku"]) or "Other",
                        size=r["specs"], upc=r["upc"], certifier=r.get("certifier") or None,
                        organic="No")           # the owner, 2026-11-18: Organic is No unless a source says Yes
             items.save(con, r["sku"], row, user, "add", photos=photo or items.KEEP)
             added.append(r["sku"])
             continue
         kept.append(r["sku"])
-        takes = {col: r[key] for key, col, _label in PRINTED
-                 for c in _follows(entry, (old_extra.get(r["sku"]) or {}).get("printed"), r)
+        takes = {col: c["list"] for key, col, _label in PRINTED
+                 for c in _follows(entry, (old_extra.get(r["sku"]) or {}).get("printed"), r, names)
                  if c["field"] == key and (r["sku"], key) not in skip}
         if photo and items.photos_of(r["sku"]):
             photo = None                        # only an entry with no photo gets the list's picture

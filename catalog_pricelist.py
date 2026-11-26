@@ -866,8 +866,12 @@ PDF_DIR = db.ROOT / "pdf-cache"
 
 
 def _logo(state):
-    path = db.ROOT / "static" / f"logo-{state.lower()}.png"
-    return path if path.exists() else None
+    """The logo a state's sheet is headed with: its own (`static/logo-<code>.png`),
+    else the firm's (`static/logo.png`), else None."""
+    for path in (db.ROOT / "static" / f"logo-{state.lower()}.png", db.ROOT / "static" / "logo.png"):
+        if path.exists():
+            return path
+    return None
 
 
 def _inline(path):
@@ -877,21 +881,56 @@ def _inline(path):
     return f"data:image/{kind};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
+# The sheet's columns, after the small picture and before the price: (the
+# row's key, the heading, the cell's class), for a supplier's price list and
+# for a state's own catalog (the owner, 2026-11-26, on Illinois and Florida:
+# "select multiple filters and then generate a catalog based on those").
+SHEET_LIST = (("sku", "SKU", "mono"), ("name", "Description", "name"), ("upc", "UPC", "mono"),
+              ("brand", "Brand", ""), ("specs", "Specs", ""))
+SHEET_CATALOG = (("sku", "Item", "mono"), ("name", "Name", "name"), ("brand", "Brand", ""),
+                 ("type", "Type", ""), ("country", "Country", ""), ("specs", "Size", ""),
+                 ("pack", "Per case", "num"))
+
+
+def _is_list(con, state):
+    return bool((db.states(con).get(state) or {}).get("price_list"))
+
+
+def _catalog_order(con, state):
+    """A state's own catalog in the order its sheet prints it: category by
+    category, the one with the most items first (items with no category
+    last), and inside a category by brand, then name."""
+    rows = db.state_products(con, state)
+    size = {}
+    for r in rows:
+        size[r["category"] or ""] = size.get(r["category"] or "", 0) + 1
+    return sorted(rows, key=lambda r: (not r["category"], -size[r["category"] or ""], r["category"] or ""))
+
+
 def sheet_rows(con, state, prices, only=None):
-    """The list's items in the list's own order, as the sheet prints them:
-    dicts with sku, name, upc, brand, specs, section, photo (a Path or None)
-    and, when `prices`, price (a float or None). `only`: a set of SKUs to keep
+    """The state's items as its sheet prints them: dicts with sku, name, brand,
+    specs, section, photo (a Path or None) and, when `prices`, price (a float
+    or None). A price list: in the list's own order, with upc. A state's own
+    catalog: by category (_catalog_order()), with type, country, pack (bottles
+    per case), and the regular price per case. `only`: a set of SKUs to keep
     (what the page is showing: the owner, 2026-11-18, "the pdf only prints
     what's been filtered at that moment"); None = every item."""
     listed = db.snapshot(con, db.qbo_source(state))["data"] or {}
+    is_list = _is_list(con, state)
     rows = []
-    for r in ordered(con, state):
+    for r in (ordered(con, state) if is_list else _catalog_order(con, state)):
         if only is not None and r["sku"] not in only:
             continue
         photo = items.PHOTO_DIR / "grid" / f"{r['sku']}.webp"
-        row = {"sku": r["sku"], "name": r["name"], "upc": r["upc"] or "", "brand": r["brand"] or "",
+        row = {"sku": r["sku"], "name": r["name"], "brand": r["brand"] or "",
                "specs": r["size"] or "", "section": r["category"] or "Other",
                "photo": photo if photo.exists() else None, "photo_v": r["photo_v"]}
+        if is_list:
+            row["upc"] = r["upc"] or ""
+        else:
+            pack = r["bottles_per_case"]
+            row.update(type=r["type"] or "", country=r["country"] or "",
+                       pack="" if not pack else f"{pack:g}")
         if prices:
             row["price"] = (listed.get(r["sku"]) or {}).get("price")
         rows.append(row)
@@ -901,13 +940,21 @@ def sheet_rows(con, state, prices, only=None):
 def sheet_html(con, state, prices, only=None):
     """The whole sheet as one HTML page for printing: the state's logo, the
     day and the state's contact line, then every item under its section heading, with the Price column only
-    when `prices`."""
+    when `prices`. A price list's sheet is headed "Price List"; a state's own
+    catalog "Catalog", with the regular price per case when `prices`."""
     e = html.escape
     name = db.states(con)[state]["name"]
     contact = db.states(con)[state].get("contact") or ""
     logo = _logo(state)
+    is_list = _is_list(con, state)
+    columns = SHEET_LIST if is_list else SHEET_CATALOG
+    title = "Price List" if is_list or prices else "Catalog"
+    attr = lambda cls: f' class="{cls}"' if cls else ""
+    heads = "".join(f'<th{attr(cls if cls == "num" else "")}>{e(head)}</th>' for _key, head, cls in columns)
+    if prices:
+        heads += f'<th class="num">{"Price" if is_list else "Case price"}</th>'
     body, section = [], None
-    cols = 6 + bool(prices)
+    cols = 1 + len(columns) + bool(prices)
     for r in sheet_rows(con, state, prices, only):
         if r["section"] != section:
             section = r["section"]
@@ -916,16 +963,17 @@ def sheet_html(con, state, prices, only=None):
         price = ""
         if prices:
             price = '<td class="num">' + ("" if r["price"] is None else f"${r['price']:,.2f}") + "</td>"
-        body.append(f'<tr><td class="pic">{pic}</td><td class="mono">{e(r["sku"])}</td>'
-                    f'<td class="name">{e(r["name"])}</td><td class="mono">{e(r["upc"])}</td>'
-                    f'<td>{e(r["brand"])}</td><td>{e(r["specs"])}</td>{price}</tr>')
+        cells = "".join(f'<td{attr(cls)}>{e(r[key] or "")}</td>' for key, _head, cls in columns)
+        body.append(f'<tr><td class="pic">{pic}</td>{cells}{price}</tr>')
     today = date.today().strftime("%B %-d, %Y")
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>{e(name)} price list</title>
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>{e(name)} {e(title.lower())}</title>
 <style>
 @page {{ size: Letter; margin: 0.5in 0.5in 0.6in }}
 body {{ font: 9.5pt/1.3 Helvetica, Arial, "Liberation Sans", sans-serif; color: #111; margin: 0 }}
 header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 1.5pt solid #111; padding-bottom: 6pt; margin-bottom: 4pt }}
 header img {{ height: 96pt }}
+header b.firm {{ font-size: 20pt; letter-spacing: .02em }}
+header b.firm small {{ display: block; font-size: 10pt; font-weight: 400; color: #444; margin-top: 2pt }}
 header h1 {{ font-size: 18pt; margin: 0; text-align: right }}
 header p {{ margin: 3pt 0 0; text-align: right; color: #444 }}
 header p.contact {{ margin-top: 8pt; color: #111; font-size: 10.5pt; font-weight: 600 }}
@@ -941,9 +989,9 @@ tr.sec th {{ text-align: left; font-size: 10pt; text-transform: uppercase; lette
 .name {{ font-weight: 600 }}
 .num {{ text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums }}
 </style></head><body>
-<header>{f'<img src="{_inline(logo)}" alt="">' if logo else f"<b>{e(name)}</b>"}
-<div><h1>Price List</h1><p>{e(today)}</p>{f'<p class="contact">{e(contact)}</p>' if contact else ''}</div></header>
-<table><thead><tr><th></th><th>SKU</th><th>Description</th><th>UPC</th><th>Brand</th><th>Specs</th>{'<th class="num">Price</th>' if prices else ''}</tr></thead>
+<header>{f'<img src="{_inline(logo)}" alt="">' if logo else f'<b class="firm">Satla Spirits<small>{e(name)}</small></b>'}
+<div><h1>{e(title)}</h1><p>{e(today if is_list else f"{name} · {today}")}</p>{f'<p class="contact">{e(contact)}</p>' if contact else ''}</div></header>
+<table><thead><tr><th></th>{heads}</tr></thead>
 <tbody>{''.join(body)}</tbody></table></body></html>"""
 
 

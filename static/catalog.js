@@ -53,39 +53,51 @@
      to the same search, menu, filters and scroll position ---------- */
   const KEY = "satla.catalog.v2." + document.body.dataset.state;   /* each state keeps its own search and filters */
   const wideQuery = window.matchMedia("(min-width:700px)");
-  /* `secs`: the sections ticked on a price list's menu. They add up (the owner,
-     2026-11-22: "other than "All" ... all the other buttons can be accummulated");
-     none ticked is All. */
-  const S = {q: "", menu: "all", secs: [], sub: null, f: blankF(), openF: {country: true}, drawer: false, wide: wideQuery.matches, scroll: 0};
+  /* The menu buttons add up (the owner, 2026-11-22, on the Meat page: "other
+     than "All" ... all the other buttons can be accummulated"; 2026-11-26:
+     "enable this same functionality for the FL and IL"). `picks` holds the
+     buttons pressed; none pressed is All. The kinds of product (a list's
+     sections; Wine, Spirits ...) widen what is shown: any of them. Mevushal
+     and Kosher for Passover narrow it: each must hold. `subs` holds the types
+     pressed under Wine and under Spirits, which add up the same way. The
+     other buttons (All, Brands, Countries, New Arrivals) are views of their
+     own: `menu`. */
+  const KIND = {wine: "Wine", spirits: "Spirits", liq: "Liqueur & Aperitif", sake: "Sake", rtd: "Ready-to-Drink", beer: "Beer"};
+  const NARROW = {mev: p => p.mev === "Yes", kfp: p => p.kfp === "Yes"};
+  const isPick = k => k.startsWith(SECTION) || k in KIND || k in NARROW || k === "nocat";
+  const S = {q: "", menu: "all", picks: [], subs: {wine: [], spirits: []}, f: blankF(), openF: {country: true}, drawer: false, wide: wideQuery.matches, scroll: 0};
   const saved = load(KEY);
   if (saved) {
-    S.q = saved.q || ""; S.sub = saved.sub || null; S.scroll = saved.scroll || 0;
+    S.q = saved.q || ""; S.scroll = saved.scroll || 0;
     if (MENU.some(m => m[0] === saved.menu)) S.menu = saved.menu;
-    const had = Array.isArray(saved.secs) ? saved.secs : [];
-    if (S.menu.startsWith(SECTION)) { had.push(S.menu.slice(SECTION.length)); S.menu = "all"; }   /* a tab saved before sections added up */
-    S.secs = had.filter(x => MENU.some(m => m[0] === SECTION + x));
+    /* a tab saved before the buttons added up held one button in `menu` (and
+       its type in `sub`), or a list's sections in `secs` */
+    const had = Array.isArray(saved.picks) ? saved.picks : (Array.isArray(saved.secs) ? saved.secs.map(x => SECTION + x) : []);
+    if (isPick(S.menu)) { had.push(S.menu); if (SUB[S.menu] && saved.sub) S.subs[S.menu] = [saved.sub]; S.menu = "all"; }
+    S.picks = [...new Set(had)].filter(k => isPick(k) && MENU.some(m => m[0] === k));
+    for (const k in S.subs) if (saved.subs && Array.isArray(saved.subs[k]) && S.picks.includes(k)) S.subs[k] = saved.subs[k].filter(x => SUB[k].includes(x));
     /* only the filters that exist today: a tab saved earlier may hold others */
     for (const k in S.f) if (saved.f && Array.isArray(saved.f[k])) S.f[k] = saved.f[k];
     Object.assign(S.openF, saved.openF || {});
   }
-  function save() { store(KEY, {q: S.q, menu: S.menu, secs: S.secs, sub: S.sub, f: S.f, openF: S.openF, scroll: window.scrollY}); }
+  function save() { store(KEY, {q: S.q, menu: S.menu, picks: S.picks, subs: S.subs, f: S.f, openF: S.openF, scroll: window.scrollY}); }
 
   /* ---------- catalog logic ---------- */
+  function kindMatch(k, p) {
+    if (k.startsWith(SECTION)) return p.cat === k.slice(SECTION.length);
+    if (k === "nocat") return !!p.x;
+    return p.cat === KIND[k] && (!SUB[k] || !S.subs[k].length || S.subs[k].includes(p.type));
+  }
   function menuMatch(p) {
-    if (S.secs.length && S.menu === "all") return S.secs.includes(p.cat);
-    switch (S.menu) {
-      case "wine": return p.cat === "Wine" && (!S.sub || p.type === S.sub);
-      case "spirits": return p.cat === "Spirits" && (!S.sub || p.type === S.sub);
-      case "liq": return p.cat === "Liqueur & Aperitif";
-      case "sake": return p.cat === "Sake";
-      case "rtd": return p.cat === "Ready-to-Drink";
-      case "beer": return p.cat === "Beer";
-      case "mev": return p.mev === "Yes";
-      case "kfp": return p.kfp === "Yes";
-      case "nocat": return !!p.x;
-      case "new": return false;
-      default: return true;
-    }
+    if (S.menu === "new") return false;
+    if (S.menu !== "all") return true;
+    const kinds = S.picks.filter(k => !(k in NARROW));
+    /* Mevushal is a matter of wine only (the owner, 2026-11-26: "there is no
+       such thing as Mevushal spirits"): pressed with kinds of product it
+       narrows the wines and leaves the rest; pressed alone it shows the
+       Mevushal items. */
+    const spared = k => k === "mev" && kinds.length && p.cat !== KIND.wine;
+    return (!kinds.length || kinds.some(k => kindMatch(k, p))) && S.picks.every(k => !(k in NARROW) || spared(k) || NARROW[k](p));
   }
   const qMatch = (p, q) => wordsMatch(p.hay, q);
   function fMatch(p, skip) {
@@ -134,8 +146,8 @@
     const base = baseList(), res = base.filter(p => fMatch(p));
     const listView = S.menu === "brands" || S.menu === "countries";
     let h = '<div class="srow"><input class="inp" id="q" type="search" data-in="q" placeholder="' + (LIST ? "Search name, section, item number" : "Search name, brand, grape, country, region") + '" value="' + esc(S.q) + '" aria-label="Search products" enterkeyhint="search"></div>';
-    h += '<div class="chips" id="menu" role="group" aria-label="Browse menu">' + MENU.map(m => '<button class="chip" data-act="menu" data-m="' + esc(m[0]) + '" aria-pressed="' + (m[0].startsWith(SECTION) ? S.menu === "all" && S.secs.includes(m[0].slice(SECTION.length)) : S.menu === m[0] && !(m[0] === "all" && S.secs.length)) + '">' + esc(m[1]) + "</button>").join("") + "</div>";
-    if (SUB[S.menu]) h += '<div class="chips" id="submenu" role="group" aria-label="' + S.menu + ' types"><button class="chip" data-act="sub" data-s="" aria-pressed="' + (!S.sub) + '">All ' + (S.menu === "wine" ? "wine" : "spirits") + "</button>" + SUB[S.menu].map(s => '<button class="chip" data-act="sub" data-s="' + esc(s) + '" aria-pressed="' + (S.sub === s) + '">' + s + "</button>").join("") + "</div>";
+    h += '<div class="chips" id="menu" role="group" aria-label="Browse menu">' + MENU.map(m => '<button class="chip" data-act="menu" data-m="' + esc(m[0]) + '" aria-pressed="' + (isPick(m[0]) ? S.menu === "all" && S.picks.includes(m[0]) : S.menu === m[0] && !(m[0] === "all" && S.picks.length)) + '">' + esc(m[1]) + "</button>").join("") + "</div>";
+    if (S.menu === "all") for (const k in SUB) if (S.picks.includes(k)) h += '<div class="chips" id="submenu-' + k + '" role="group" aria-label="' + k + ' types"><button class="chip" data-act="sub" data-m="' + k + '" data-s="" aria-pressed="' + (!S.subs[k].length) + '">All ' + k + "</button>" + SUB[k].map(s => '<button class="chip" data-act="sub" data-m="' + k + '" data-s="' + esc(s) + '" aria-pressed="' + S.subs[k].includes(s) + '">' + s + "</button>").join("") + "</div>";
     if (listView) {
       const key = S.menu === "brands" ? "brand" : "country", m = new Map();
       P.forEach(p => { if (p[key]) m.set(p[key], (m.get(p[key]) || 0) + 1); });
@@ -151,7 +163,7 @@
     if (LIST) return h + listHTML(res);
     h += '<div class="cat">';
     if (S.wide) h += '<div><div class="count"><b>Filters</b>' + (nFilters() ? '<button class="link" data-act="clear">Clear all</button>' : "") + "</div>" + filtersHTML(base) + "</div>";
-    h += '<div class="col"><div class="count"><span><b>' + res.length + "</b> of " + P.length + ' products</span>' +
+    h += '<div class="col"><div class="count"><span><b>' + res.length + "</b> of " + P.length + ' products</span>' + pdfHTML(res) +
       (S.wide ? "" : '<button class="btn sm" data-act="drawer">Filters' + (nFilters() ? " (" + nFilters() + ")" : "") + "</button>") + "</div>";
     if (nFilters()) {
       h += '<div class="chips" id="active">';
@@ -175,15 +187,22 @@
      the box saves it: see the "change" listener). */
   const PRICES = !!view.dataset.prices, PRICE_URL = view.dataset.priceUrl || "";
   const priceText = v => v == null ? "" : v.toFixed(2);
+  /* The Download buttons. The PDF holds exactly the items shown just now (the
+     owner, 2026-11-18): the search, the menu buttons and the filters in force;
+     with nothing filtered, everything. Without the price column unless the
+     viewer may see prices. A form, because a few hundred item numbers do not
+     fit in an address. */
+  function pdfHTML(res) {
+    const pdf = view.dataset.pdfUrl;
+    if (!pdf || !res.length) return "";
+    const part = res.length < P.length, shown = part ? " (" + res.length + " shown)" : "";
+    return '<form class="srow" method="post" action="' + pdf + '" data-pdf="1"><input type="hidden" name="csrf" value="' + esc(view.dataset.csrf) + '">' +
+      (part ? '<input type="hidden" name="only" value="' + esc(res.map(p => p.sku).join(",")) + '">' : "") +
+      (PRICES ? '<button class="btn sm" name="prices" value="1">Download PDF' + shown + '</button><button class="btn sm">PDF without prices' + shown + "</button>"
+              : '<button class="btn sm">Download PDF' + shown + "</button>") + "</form>";
+  }
   function listHTML(res) {
-    /* The PDF holds exactly the rows shown just now (the owner, 2026-11-18): the
-       search, section and brand in force; with nothing filtered, the whole list.
-       Without the Price column unless the viewer may see prices. */
-    const part = res.length < P.length, only = part ? "only=" + encodeURIComponent(res.map(p => p.sku).join(",")) : "";
-    const shown = part ? " (" + res.length + " shown)" : "";
-    const pdf = view.dataset.pdfUrl, pdfs = !pdf || !res.length ? "" : '<span class="srow">' +
-      (PRICES ? '<a class="btn sm" href="' + pdf + "?prices=1" + (only && "&" + only) + '">Download PDF' + shown + '</a><a class="btn sm" href="' + pdf + (only && "?" + only) + '">PDF without prices' + shown + "</a>"
-              : '<a class="btn sm" href="' + pdf + (only && "?" + only) + '">Download PDF' + shown + "</a>") + "</span>";
+    const pdfs = pdfHTML(res);
     /* Admins: the page that takes a supplier's newer list (a PDF). */
     const up = view.dataset.uploadUrl ? '<a class="btn sm" href="' + view.dataset.uploadUrl + '">Upload a new list</a>' : "";
     let h = '<div class="count"><span><b>' + res.length + "</b> of " + P.length + " items</span>" + pdfs + up + "</div>";
@@ -254,14 +273,14 @@
     const d = b.dataset;
     switch (d.act) {
       case "menu":
-        if (d.m.startsWith(SECTION)) {             /* a section is added to, or taken from, those shown */
-          const x = d.m.slice(SECTION.length);
-          S.secs = S.menu === "all" && S.secs.includes(x) ? S.secs.filter(y => y !== x) : (S.menu === "all" ? S.secs : []).concat(x);
-          S.menu = "all";
-        } else { S.menu = d.m; S.secs = []; }
-        S.sub = null; render(); break;
-      case "sub": S.sub = d.s || null; render(); break;
-      case "pick": S.f = blankF(); S.f[d.k] = [d.v]; S.menu = "all"; S.secs = []; S.sub = null; S.openF[d.k] = true; render(); window.scrollTo(0, 0); break;
+        if (isPick(d.m)) {                         /* added to, or taken from, the buttons pressed */
+          if (S.menu !== "all") { S.menu = "all"; S.picks = []; }
+          toggle(S.picks, d.m);
+        } else { S.menu = d.m; S.picks = []; }
+        for (const k in S.subs) if (!S.picks.includes(k)) S.subs[k] = [];
+        render(); break;
+      case "sub": if (d.s) toggle(S.subs[d.m], d.s); else S.subs[d.m] = []; render(); break;
+      case "pick": S.f = blankF(); S.f[d.k] = [d.v]; S.menu = "all"; S.picks = []; S.subs = {wine: [], spirits: []}; S.openF[d.k] = true; render(); window.scrollTo(0, 0); break;
       case "drawer": S.drawer = true; render(); break;
       case "closedrawer": if (e.target === b || d.x) { S.drawer = false; render(); } break;
       case "clear": S.f = blankF(); render(); break;

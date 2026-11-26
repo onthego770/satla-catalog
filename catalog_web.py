@@ -293,7 +293,8 @@ def catalog():
         **({"pv": r["photo_v"]} if r["photo_v"] else {}),
         **({"out": 1} if _out(have, r["sku"]) else {}),
     } for r in db.state_products(g.db, g.state)]
-    return render_template("catalog.html", products=products)
+    return render_template("catalog.html", products=products, pdf_url=url_for("list_pdf"),
+                           prices=_sees_prices(g.state))
 
 
 def _list_page(have):
@@ -315,23 +316,24 @@ def _list_page(have):
                            upload_url=url_for("admin_price_list") if g.user["is_admin"] else None)
 
 
-@app.route("/price-list.pdf")
+@app.route("/price-list.pdf", methods=["GET", "POST"])
 @login_required
 def list_pdf():
-    """A price list's sheet as a PDF to download, with the state's logo (the
-    owner, 2026-11-18). `?prices=1` adds the Price column, for someone who may
+    """The state's sheet as a PDF to download: a price list's with the state's
+    logo (the owner, 2026-11-18), a state's own catalog by category (the
+    owner, 2026-11-26: "select multiple filters and then generate a catalog
+    based on those"). `prices=1` adds the price column, for someone who may
     see prices; anyone else gets the sheet without it whatever they ask.
-    `?only=` limits it to the items the page is showing (the owner, 2026-11-18:
-    "the pdf only prints what's been filtered at that moment")."""
-    if not _price_list(g.state):
-        abort(404)
-    prices = request.args.get("prices") == "1" and _sees_prices(g.state)
+    `only` limits it to the items the page is showing (the owner, 2026-11-18:
+    "the pdf only prints what's been filtered at that moment"). The page
+    posts a form, because a few hundred item numbers do not fit in an address."""
+    prices = request.values.get("prices") == "1" and _sees_prices(g.state)
     # `only`: the item numbers the page is showing just now (its search, section
     # and brand), separated by commas; absent = the whole list.
     only = None
-    if request.args.get("only"):
+    if request.values.get("only"):
         held = {p["sku"] for p in db.state_products(g.db, g.state)}
-        only = held & set(request.args["only"].split(","))
+        only = held & set(request.values["only"].split("\n" if "\n" in request.values["only"] else ","))
         if not only:
             abort(404)
         if only == held:
@@ -344,7 +346,8 @@ def list_pdf():
             "The server could not make the PDF just now. Try again in a minute.")), 503
     today = datetime.now(OFFICE_TZ).strftime("%Y-%m-%d")
     resp = send_file(path, mimetype="application/pdf", as_attachment=True, max_age=0,
-                     download_name=f"Satla-{_state_name(g.state)}-price-list-{today}"
+                     download_name=f"Satla-{_state_name(g.state)}-"
+                                   f"{'price-list' if _price_list(g.state) or prices else 'catalog'}-{today}"
                                    f"{'' if only is None else '-selection'}"
                                    f"{'' if prices else '-no-prices'}.pdf")
     resp.headers["Cache-Control"] = "no-store"

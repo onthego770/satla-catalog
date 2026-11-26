@@ -143,6 +143,28 @@ CREATE TABLE IF NOT EXISTS qbo_invoices (
     lines       TEXT,               -- JSON: [{sku, name, qty, price, amount}]
     PRIMARY KEY (company, id)
 );
+-- The kept history of QuickBooks invoices (the owner, 2026-11-23: "please
+-- freeze the QuickBooks invoice history"): EVERY invoice of every company,
+-- however old, each line with its SKU. Unlike qbo_invoices it is never emptied:
+-- a refresh adds new invoices and updates the ones it reads, and an invoice
+-- QuickBooks no longer returns stays, with its last_seen left behind. No page
+-- reads it; it is there so the history by product outlives QuickBooks.
+CREATE TABLE IF NOT EXISTS qbo_invoice_history (
+    company     TEXT NOT NULL,
+    id          TEXT NOT NULL,      -- QuickBooks Invoice Id (per company)
+    doc_number  TEXT,
+    customer_id TEXT,
+    customer    TEXT,               -- the customer's name on the invoice
+    txn_date    TEXT,               -- YYYY-MM-DD
+    due_date    TEXT,
+    total       REAL,
+    balance     REAL,
+    lines       TEXT,               -- JSON: [{sku, name, qty, price, amount}], as qbo_invoices
+    raw         TEXT,               -- the whole invoice as QuickBooks returned it (JSON)
+    first_seen  TEXT,               -- when a refresh first read it
+    last_seen   TEXT,               -- when a refresh last read it
+    PRIMARY KEY (company, id)
+);
 CREATE INDEX IF NOT EXISTS qbo_invoices_by_customer
     ON qbo_invoices (company, customer_id, txn_date);
 CREATE TABLE IF NOT EXISTS qbo_last_prices (
@@ -522,6 +544,29 @@ def replace_company(con, company, customers, invoices, last_prices):
             "total, balance, lines) VALUES (?,?,?,?,?,?,?,?)",
             [(company, v["id"], v["doc_number"], v["customer_id"], v["txn_date"],
               v["total"], v["balance"], json.dumps(v["lines"])) for v in invoices])
+
+
+def keep_invoices(con, company, history):
+    """Add one company's invoices to the kept history (qbo_invoice_history):
+    a new invoice is added, one already there is brought up to date, and
+    nothing is ever taken out. `history` is the fifth value of
+    catalog_live.read_company(). Returns how many are kept for the company."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with con:
+        con.executemany(
+            "INSERT INTO qbo_invoice_history (company, id, doc_number, customer_id, customer, "
+            "txn_date, due_date, total, balance, lines, raw, first_seen, last_seen) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT (company, id) DO UPDATE SET doc_number = excluded.doc_number, "
+            "customer_id = excluded.customer_id, customer = excluded.customer, "
+            "txn_date = excluded.txn_date, due_date = excluded.due_date, total = excluded.total, "
+            "balance = excluded.balance, lines = excluded.lines, raw = excluded.raw, "
+            "last_seen = excluded.last_seen",
+            [(company, v["id"], v["doc_number"], v["customer_id"], v["customer"], v["txn_date"],
+              v["due_date"], v["total"], v["balance"], json.dumps(v["lines"]), v["raw"], now, now)
+             for v in history])
+    return con.execute("SELECT COUNT(*) FROM qbo_invoice_history WHERE company = ?",
+                       (company,)).fetchone()[0]
 
 
 def salesman_key(name):

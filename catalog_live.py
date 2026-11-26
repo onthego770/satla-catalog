@@ -83,7 +83,7 @@ def read_company(state, qb, skus):
     regular prices of the items in `skus` (None = every item), its customers,
     and its invoices.
 
-    Returns (items, customers, invoices, last_prices). `items` is
+    Returns (items, customers, invoices, last_prices, history). `items` is
     {sku: {price, bpc, ml, name}}; `price` is the regular price per case (None
     when QuickBooks has none set), `name` what that company calls the item. `customers` and `invoices`
     are rows ready for Catalog.db: a customer's address is the billing address,
@@ -96,6 +96,10 @@ def read_company(state, qb, skus):
     customer and each of those items, the price per case on the most recent invoice
     that includes it, however old (wireframe rule, approved 2026-11-12). A line
     with no price or a price of zero (a free sample) is not a previous price.
+    
+    The fifth value, `history`, is every invoice of the company, however old,
+    for the kept history (db.keep_invoices()): the same fields plus the
+    customer's name, the due date and `raw`, the invoice as QuickBooks gave it.
     """
     mc = _library()
     import qbo_mmk_salesorder as qbo
@@ -117,6 +121,7 @@ def read_company(state, qb, skus):
                           "salesman": custom.get(c["id"], {}).get(SALESMAN_FIELD, ""),
                           **addr})
     invoices, last_prices, overdue, opened = [], {}, {}, {}
+    history, as_read = [], {str(v.Id): v for v in raw_invoices}
     cutoff = since.strftime("%Y-%m-%d")
     today = date.today().isoformat()
     for o in qbo.build_orders(raw_invoices, "", sku_map):       # oldest first
@@ -135,15 +140,20 @@ def read_company(state, qb, skus):
             price = _num(ln["price"])
             if ln["sku"] in items and price and price > 0:
                 last_prices[(str(o["customer_id"]), ln["sku"])] = (price, day)
-        if day < cutoff:
-            continue
-        invoices.append({
+        row = {
             "id": str(o["id"]), "doc_number": o["docnumber"], "customer_id": str(o["customer_id"]),
             "txn_date": day,
             "total": _num(o["total"]) or 0.0, "balance": _num(o["balance"]) or 0.0,
             "lines": [{"sku": ln["sku"], "name": ln["name"], "qty": _num(ln["qty"]),
                        "price": _num(ln["price"]), "amount": _num(ln["amount"])}
-                      for ln in o["lines"]]})
+                      for ln in o["lines"]]}
+        # The kept history: EVERY invoice, however old, each line with its SKU,
+        # and the invoice exactly as QuickBooks gave it (db.keep_invoices()).
+        history.append({**row, "customer": o["customer"], "due_date": o["due"],
+                        "raw": as_read[str(o["id"])].to_json()})
+        if day < cutoff:
+            continue
+        invoices.append(row)
     for c in customers:
         # never more than the customer owes in all (a credit can stand against it)
         late = overdue.get(str(c["id"]), [0.0, 0, None])
@@ -151,7 +161,7 @@ def read_company(state, qb, skus):
         # how many invoices are open, how many of them are past due, and the
         # due date of the one that has been past due the longest
         c["open_n"], c["overdue_n"], c["overdue_since"] = opened.get(str(c["id"]), 0), late[1], late[2]
-    return items, customers, invoices, last_prices
+    return items, customers, invoices, last_prices, history
 
 
 def save_states(con):
@@ -228,13 +238,15 @@ def refresh(log=print):
         inventory_read = False
         try:
             with qbo.qbo_client(info["qbo_config"]) as qb:
-                data, customers, invoices, last_prices = read_company(state, qb, None)
+                data, customers, invoices, last_prices, history = read_company(state, qb, None)
                 db.replace_company(con, state, customers, invoices, last_prices)
+                kept = db.keep_invoices(con, state, history)
                 db.save_snapshot(con, source, payload={
                     s: {"price": v["price"], "name": v["name"]} for s, v in data.items()})
                 results[source] = data
                 log(f"QuickBooks {label}: {len(data)} items, {len(customers)} customers, "
-                    f"{len(invoices)} invoices, {len(last_prices)} previous prices read")
+                    f"{len(invoices)} invoices, {len(last_prices)} previous prices read; "
+                    f"{kept} invoices in the kept history")
                 inventory_read = True
                 inventory(state, qb)                 # same client when it is QuickBooks
         except Exception as e:                       # noqa: BLE001 - keep going

@@ -108,7 +108,7 @@ def _months(first, last, today):
     return m(first, True) + "–" + m(last, True)
 
 
-def book(invoices):
+def book(invoices, by_name=False):
     """One state's invoices, sorted out once for every page that asks:
 
       orders  {customer_id: [(day, total, balance, doc_number)]}, oldest first
@@ -116,27 +116,35 @@ def book(invoices):
       first   {sku: the first day anyone in the state bought it}
       buyers  {sku: how many customers ever bought it}
 
+      names   {sku: what QuickBooks called it on its latest invoice}
+
     `invoices` is the rows of qbo_invoices for the state (customer_id,
-    txn_date, total, balance, doc_number, lines as JSON text)."""
-    orders, buys, first, buyers = {}, {}, {}, {}
+    txn_date, total, balance, doc_number, lines as JSON text).
+
+    `by_name`: for a state whose invoices are not tied to its catalog by item
+    number, a line with no item number counts under its QuickBooks name (the
+    name stands where the SKU would)."""
+    orders, buys, first, buyers, names, named = {}, {}, {}, {}, {}, {}
     for v in invoices:
         cid, day = v["customer_id"], date.fromisoformat(v["txn_date"])
         orders.setdefault(cid, []).append((day, v["total"] or 0.0, v["balance"] or 0.0,
                                            v["doc_number"]))
         for ln in json.loads(v["lines"] or "[]"):
-            sku = ln.get("sku")
+            sku = ln.get("sku") or (by_name and ln.get("name")) or ""
             if not sku or not (ln.get("qty") or 0) > 0 or not (ln.get("amount") or 0) > 0:
                 continue
             by_day = buys.setdefault(cid, {}).setdefault(sku, {})
             by_day[day] = by_day.get(day, 0) + ln["qty"]
             if sku not in first or day < first[sku]:
                 first[sku] = day
+            if sku not in named or day >= named[sku]:
+                named[sku], names[sku] = day, ln.get("name") or sku
     for mine in buys.values():
         for sku in mine:
             buyers[sku] = buyers.get(sku, 0) + 1
     for rows in orders.values():
         rows.sort(key=lambda r: r[0])
-    return {"orders": orders, "buys": buys, "first": first, "buyers": buyers}
+    return {"orders": orders, "buys": buys, "first": first, "buyers": buyers, "names": names}
 
 
 def customer_flags(order_days, today):

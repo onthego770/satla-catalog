@@ -9,7 +9,7 @@
     <h2 class="title">Invoice {{ v['doc_number'] }}</h2>
     <span class="meta">{{ date }} · <span class="{{ 'open' if is_open else 'paid' }}">{{ 'Open' if is_open else 'Paid' }}</span>{% if is_open %} ({{ v['balance']|money }} owed){% endif %} · QuickBooks {{ company_name }}</span>
    </div>
-   <a class="btn" href="{{ url_for('order', company=v['company'], cid=v['customer_id'], copy=v['id']) }}">Copy Order</a>
+   {% if orders %}<a class="btn" href="{{ url_for('order', company=v['company'], cid=v['customer_id'], copy=v['id']) }}">Copy Order</a>{% endif %}
   </div>
   <div class="tw"><table>
     <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>

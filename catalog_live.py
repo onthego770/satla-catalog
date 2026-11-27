@@ -100,15 +100,21 @@ def read_company(state, qb, skus):
     The fifth value, `history`, is every invoice of the company, however old,
     for the kept history (db.keep_invoices()): the same fields plus the
     customer's name, the due date and `raw`, the invoice as QuickBooks gave it.
+
+    A price-list state (Meat) that has a QuickBooks company gives its customers
+    and invoices only: `items` and `last_prices` come back empty, because its
+    items and prices are the price list's, not QuickBooks'.
     """
     mc = _library()
     import qbo_mmk_salesorder as qbo
 
     since = date.today() - timedelta(days=HISTORY_DAYS)
-    prices = mc.get_regular_prices(state, qb=qb)
-    items = {r.sku: {"price": _num(r.unit_price), "bpc": _num(r.bpc), "ml": _num(r.vol_ml),
-                     "name": r.name}
-             for r in _wanted(prices, skus).itertuples()}
+    items = {}
+    if mc.state_info(state)["inventory"] != PRICE_LIST:
+        prices = mc.get_regular_prices(state, qb=qb)
+        items = {r.sku: {"price": _num(r.unit_price), "bpc": _num(r.bpc), "ml": _num(r.vol_ml),
+                         "name": r.name}
+                 for r in _wanted(prices, skus).itertuples()}
     raw_customers = qbo.fetch_customers(qb)
     custom = qbo.fetch_customer_custom_fields(qb)
     raw_invoices = qbo.fetch_invoices_since(qb, ALL_INVOICES_FROM)
@@ -168,8 +174,10 @@ def save_states(con):
     """Copy the library's STATES table into Catalog.db (snapshot `states`), for
     the web pages: each state's name, the name of its inventory system, and the
     flags the site acts on. `price_list` marks a row whose inventory is "list":
-    a supplier's price list held in Catalog.db, with no QuickBooks company and
-    no MMK behind it."""
+    a supplier's price list held in Catalog.db, with no MMK behind it and no
+    items or prices from QuickBooks. `customers` marks a row with a QuickBooks
+    company to read customers and invoices from: every state, and a price list
+    whose row names one (`qbo_config`)."""
     mc = _library()
     db.save_snapshot(con, db.STATES_SOURCE, payload={
         code: {"name": info["name"], "inventory": info["inventory_name"],
@@ -177,6 +185,8 @@ def save_states(con):
                "order_email": info.get("order_email") or "",
                "price_list": info["inventory"] == PRICE_LIST,
                "price_admin_only": bool(info.get("price_admin_only")),
+               "customers": info["inventory"] != PRICE_LIST or bool(info.get("qbo_config")),
+               "customers_admin_only": bool(info.get("customers_admin_only")),
                "contact": info.get("contact") or ""}
         for code, info in mc.STATES.items()})
 
@@ -185,7 +195,14 @@ def refresh(log=print):
     """Read every state and store it in Catalog.db. One source failing does not
     stop the others; a failure keeps that source's last good figures.
 
-    A price-list state (the Meat list) is skipped: nothing outside holds it.
+    A price-list state (the Meat list) has no items, prices or stock to read:
+    those stay as `manage.py load-price-list` stored them. When its row names
+    a QuickBooks company, its customers and invoices are read from it like any
+    state's (the owner, 2026-11-27: a customer list for Meat, "It has it's own
+    QBO"); with none it is skipped.
+
+    Snapshot `co_<st>` (db.company_source()) holds no figures: it records when
+    a state's customers and invoices were last read and whether that worked.
 
     Stored per state (codes come from the library's STATES): snapshot
     `qbo_<st>` = {sku: {price, name}} for every item of that state's QuickBooks
@@ -229,12 +246,29 @@ def refresh(log=print):
             log(f"{label} inventory ({info['inventory_name']}): FAILED - {type(e).__name__}: {e}")
 
     for state, info in mc.STATES.items():
-        if info["inventory"] == PRICE_LIST:
+        listed = info["inventory"] == PRICE_LIST
+        if listed and not info.get("qbo_config"):
             # Nothing to read: its price list is loaded by hand
             # (`manage.py load-price-list`) and its snapshots stay as loaded.
             log(f"{info['name']}: a price list held in Catalog.db, not read here")
             continue
         source, label = db.qbo_source(state), info["name"]
+        if listed:
+            # Customers and invoices only. Its price snapshot (qbo_<st>) and
+            # its items belong to the price list and are NOT touched here.
+            try:
+                with qbo.qbo_client(info["qbo_config"]) as qb:
+                    _items, customers, invoices, last_prices, history = read_company(state, qb, None)
+                    db.replace_company(con, state, customers, invoices, last_prices)
+                    kept = db.keep_invoices(con, state, history)
+                    db.save_snapshot(con, db.company_source(state), payload={})
+                    log(f"QuickBooks {label}: {len(customers)} customers, {len(invoices)} "
+                        f"invoices read; {kept} invoices in the kept history "
+                        "(items and prices: the price lists held in Catalog.db)")
+            except Exception as e:                   # noqa: BLE001 - keep going
+                db.save_snapshot(con, db.company_source(state), error=f"{type(e).__name__}: {e}")
+                log(f"QuickBooks {label}: FAILED - {type(e).__name__}: {e}")
+            continue
         inventory_read = False
         try:
             with qbo.qbo_client(info["qbo_config"]) as qb:
@@ -243,6 +277,7 @@ def refresh(log=print):
                 kept = db.keep_invoices(con, state, history)
                 db.save_snapshot(con, source, payload={
                     s: {"price": v["price"], "name": v["name"]} for s, v in data.items()})
+                db.save_snapshot(con, db.company_source(state), payload={})
                 results[source] = data
                 log(f"QuickBooks {label}: {len(data)} items, {len(customers)} customers, "
                     f"{len(invoices)} invoices, {len(last_prices)} previous prices read; "
@@ -251,6 +286,8 @@ def refresh(log=print):
                 inventory(state, qb)                 # same client when it is QuickBooks
         except Exception as e:                       # noqa: BLE001 - keep going
             db.save_snapshot(con, source, error=f"{type(e).__name__}: {e}")
+            if not inventory_read:                   # the company read itself failed
+                db.save_snapshot(con, db.company_source(state), error=f"{type(e).__name__}: {e}")
             log(f"QuickBooks {label}: FAILED - {type(e).__name__}: {e}")
         if not inventory_read:
             # QuickBooks failed; inventory kept elsewhere (MMK) can still be read.

@@ -345,6 +345,15 @@ def qbo_source(state):
     return "qbo_" + state.lower()
 
 
+def company_source(state):
+    """Snapshot key of a state's last read of its QuickBooks CUSTOMERS and
+    invoices: it holds no figures, only when that read was tried and whether
+    it worked. Kept apart from qbo_source() because a price-list state with a
+    QuickBooks company (Meat) has customers from QuickBooks while its prices
+    are the list's own."""
+    return "co_" + state.lower()
+
+
 def inv_source(state):
     """Snapshot key of a state's inventory: which products it has, and cases on hand."""
     return "inv_" + state.lower()
@@ -451,7 +460,10 @@ def states(con):
     list: no QuickBooks company, no MMK, no stock, customers or orders; see
     catalog_pricelist.py); `price_admin_only` is True when only admins see
     that state's prices; `contact` is the line its price list PDF prints under
-    the date ('' = none)."""
+    the date ('' = none); `customers` is True when the state has a QuickBooks
+    company its customers and invoices are read from (every state, and a price
+    list that has one); `customers_admin_only` is True when only admins see
+    them."""
     return snapshot(con, STATES_SOURCE)["data"] or {}
 
 

@@ -176,10 +176,27 @@ def _order_to(code):
 
 def _price_list(code):
     """True for a choice on the switch that is a supplier's price list held in
-    Catalog.db (the Meat list; `price_list` in db.states()): it has no stock,
-    no customers and no orders, only items to look at (the owner, 2026-11-18:
-    "View only first")."""
+    Catalog.db (the Meat list; `price_list` in db.states()): it has no stock
+    and no orders, only items to look at (the owner, 2026-11-18: "View only
+    first"). Whether it has customers is a separate matter: _has_customers()."""
     return bool(g.states[code].get("price_list"))
+
+
+def _has_customers(code):
+    """Whether the signed-in person gets this state's Customers pages: the
+    state has a QuickBooks company its customers are read from (`customers` in
+    db.states(): every state, and a price list that has one), and its row does
+    not keep them to admins (`customers_admin_only`; the owner, 2026-11-27, on
+    a customer list for Meat: "yes, admins only")."""
+    info = g.states[code]
+    return (bool(info.get("customers", not info.get("price_list")))
+            and (bool(g.user["is_admin"]) or not info.get("customers_admin_only")))
+
+
+def _takes_orders(code):
+    """Whether New Order and Copy Order exist for this state's customers: not
+    for a price list (Meat is view only; its customers are there to look at)."""
+    return not _price_list(code)
 
 
 def _sees_prices(code):
@@ -194,7 +211,7 @@ def _asset_version():
     def asset(name):
         path = db.ROOT / "static" / name
         return url_for("static", filename=name, v=int(path.stat().st_mtime))
-    return {"asset": asset, "form_token": _form_token}
+    return {"asset": asset, "form_token": _form_token, "has_customers": _has_customers}
 
 
 @app.after_request
@@ -254,7 +271,7 @@ def set_state():
         abort(400)
     session["state"] = code
     return redirect(url_for("customers" if request.form.get("section") == "customers"
-                            and not _price_list(code) else "catalog"))
+                            and _has_customers(code) else "catalog"))
 
 
 # --- catalog ------------------------------------------------------------------
@@ -581,7 +598,7 @@ def _day(iso_date):
 def _qbo_sources(companies):
     out = []
     for code in companies:
-        snap = db.snapshot(g.db, db.qbo_source(code))
+        snap = db.snapshot(g.db, db.company_source(code))
         out.append({"label": _state_name(code), "as_of": _when(snap["fetched_at"]),
                     "stale": not snap["ok"]})
     return out
@@ -598,6 +615,8 @@ def _whose():
 def _customer(company, cid):
     """The customer, or a 404 when it does not exist or is not this person's.
     Every page about one customer (its page, invoices, orders) goes through here."""
+    if not _has_customers(company):
+        abort(404)
     c = db.customer(g.db, company, cid, _whose())
     if c is None:
         abort(404)
@@ -623,12 +642,32 @@ def _date(iso_date):
 def _book(company):
     """insight.book() for one state's invoices, kept in this worker until the
     refresh reads them again (sorting them out for every page view would be
-    wasted work on a small server)."""
-    stamp = db.snapshot(g.db, db.qbo_source(company))["attempted_at"]
+    wasted work on a small server). A price list's invoices are not tied to
+    its items by item number, so a line with none counts under its name."""
+    stamp = db.snapshot(g.db, db.company_source(company))["attempted_at"]
     held = _BOOKS.get(company)
     if held is None or held[0] != stamp:
-        held = _BOOKS[company] = (stamp, insight.book(db.company_invoices(g.db, company)))
+        held = _BOOKS[company] = (stamp, insight.book(db.company_invoices(g.db, company),
+                                                      by_name=_price_list(company)))
     return held[1]
+
+
+def _invoiced_products(company):
+    """The `products` of insight.brief() for a state with no orders (a price
+    list with customers: Meat): everything its invoices name, called what
+    QuickBooks calls it (without QuickBooks' category in front), or by its
+    catalog entry where the invoice's item number is an item of the list.
+    None can be ordered (`reg` None), so nothing is suggested: the customer
+    page shows what was bought, how often and when. `page` says whether the
+    name can link to a product page."""
+    listed = {p["sku"]: p for p in db.state_products(g.db, company)}
+    out = {}
+    for key, name in _book(company)["names"].items():
+        p = listed.get(key)
+        out[key] = {"sku": key, "name": p["name"] if p else (name.rsplit(":", 1)[-1].strip() or name),
+                    "brand": p["brand"] if p else "", "grape": "", "page": p is not None,
+                    "reg": None, "prev": None, "hand": None}
+    return out
 
 
 def _brief(company, cid, today=None):
@@ -636,7 +675,8 @@ def _brief(company, cid, today=None):
     buying, what similar customers carry, what is new, and what to ask for.
     The products are the ones New Order offers (_order_products()), so what is
     suggested is exactly what can be ordered."""
-    products = {p["sku"]: p for p in _order_products(company, cid)}
+    products = (_invoiced_products(company) if not _takes_orders(company)
+                else {p["sku"]: p for p in _order_products(company, cid)})
     return insight.brief(_book(company), cid, products, today or _today())
 
 
@@ -659,10 +699,10 @@ def span(days):
 @app.route("/customers")
 @login_required
 def customers():
-    if _price_list(g.state):
+    if not _has_customers(g.state):
         return render_template("message.html", title="No customers here", message=(
-            f"{_state_name(g.state)} is a price list to look at: it has no customers "
-            "or orders on this site. Use the switch at the top for a state's customers."))
+            f"{_state_name(g.state)} has no customers for this login on this site. "
+            "Use the switch at the top for a state's customers."))
     # Beside each customer: how long ago the last order was and where the
     # customer stands against its usual gap between orders (catalog_insight).
     flags = insight.customer_flags(
@@ -714,7 +754,7 @@ def customer(company, cid):
     address = ", ".join(x for x in (c["street"], place) if x)
     return render_template("customer.html", c=c, address=address, invoices=invoices,
                            brief=_brief(company, cid, today), words=insight.STATUS_WORDS,
-                           rules=insight.RULES, today=today,
+                           rules=insight.RULES, today=today, orders=_takes_orders(company),
                            company_name=_state_name(company),
                            sources=_qbo_sources((company,)))
 
@@ -744,7 +784,7 @@ def invoice(company, iid):
     return render_template("invoice.html", v=v, lines=lines, date=_day(v["txn_date"]),
                            is_open=(v["balance"] or 0) > 0.004,
                            adjustment=adjustment if abs(adjustment) >= 0.01 else None,
-                           customer_name=c["name"],
+                           customer_name=c["name"], orders=_takes_orders(company),
                            company_name=_state_name(company),
                            sources=_qbo_sources((company,)))
 
@@ -789,6 +829,8 @@ def _order_sources(company):
 @login_required
 def order(company, cid):
     _use_state(company)
+    if not _takes_orders(company):
+        abort(404)
     c = _customer(company, cid)
     copy = None
     iid = request.args.get("copy")
@@ -894,6 +936,8 @@ def _send_order_email(to, subject, body):
 @login_required
 def order_send(company, cid):
     _use_state(company)
+    if not _takes_orders(company):
+        abort(404)
     c = _customer(company, cid)
     back = url_for("order", company=company, cid=cid)
     ctx = {"c": c, "back": back, "to": _order_to(company), "cc": g.user["email"],

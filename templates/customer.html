@@ -3,14 +3,16 @@
 {% block title %}{{ c['name'] }} · Satla Spirits{% endblock %}
 {% macro val(v) %}{% if v %}{{ v }}{% else %}<span class="meta">—</span>{% endif %}{% endmacro %}
 {% macro pill(s) %}{% if s %}<span class="tag s-{{ s }}">{{ words[s] }}</span>{% endif %}{% endmacro %}
-{% macro prod(x) %}<a href="{{ url_for('product', sku=x.sku) }}">{{ x.name }}</a>{% if x.p.out %} <span class="tag out">OUT</span>{% endif %}{% endmacro %}
+{% macro prod(x) %}{% if x.p.page is defined and not x.p.page %}{{ x.name }}{% else %}<a href="{{ url_for('product', sku=x.sku) }}">{{ x.name }}</a>{% endif %}{% if x.p.out %} <span class="tag out">OUT</span>{% endif %}{% endmacro %}
 {% macro brow(m) %}
         <div class="brow">
           <span class="rk">{{ m.rank }}</span>
-          <div>{{ prod(m) }}<br><span class="meta">{{ m.cases|cs }} cs · last {{ m.last|shortday }} ·
-            {% if m.times > 1 %}usually {{ m.qty|cs }} cs every {{ m.cycle|span }}{% else %}{{ m.qty|cs }} cs, bought once{% endif %}
+          {#- a state with no orders (a price list): QuickBooks' own quantities, which are not always cases #}
+          {%- set u = ' cs' if orders else '' %}
+          <div>{{ prod(m) }}<br><span class="meta">{{ m.cases|cs }}{{ u }} · last {{ m.last|shortday }} ·
+            {% if m.times > 1 %}usually {{ m.qty|cs }}{{ u }} every {{ m.cycle|span }}{% else %}{{ m.qty|cs }}{{ u }}, bought once{% endif %}
             {%- if m.p.prev %} · last paid {{ m.p.prev.p|money }}{% endif %}
-            {%- if m.p.reg is none %} · cannot be ordered{% elif m.p.out %} · <b class="outnote">Out of stock</b>{% elif m.p.hand is not none %} · {{ m.p.hand }} cs on hand{% endif %}</span></div>
+            {%- if not orders %}{% elif m.p.reg is none %} · cannot be ordered{% elif m.p.out %} · <b class="outnote">Out of stock</b>{% elif m.p.hand is not none %} · {{ m.p.hand }} cs on hand{% endif %}</span></div>
           <span>{{ pill(m.status) }}</span>
         </div>
 {% endmacro %}
@@ -23,7 +25,7 @@
       <h2 class="title">{{ c['name'] }}</h2>
       <span class="meta">QuickBooks company: {{ company_name }} <span class="st">{{ c['company'] }}</span></span>
     </div>
-    <a class="btn pri" href="{{ url_for('order', company=c['company'], cid=c['id']) }}">New Order</a>
+    {% if orders %}<a class="btn pri" href="{{ url_for('order', company=c['company'], cid=c['id']) }}">New Order</a>{% endif %}
   </div>
 
   {# What to sell: worked out from the QuickBooks invoices (catalog_insight.py) #}
@@ -59,7 +61,7 @@
 
   {% if brief.bought %}
   <div class="box">
-    <h3>What they buy: last 12 months, best seller first</h3>
+    <h3>What they buy: last 12 months, {{ 'best seller first' if orders else 'largest quantity first' }}</h3>
     <div>
       {% for m in brief.bought[:8] %}{{ brow(m) }}{% endfor %}
     </div>
@@ -126,7 +128,7 @@
       {% else %}
       <p class="meta">No invoices in the last 12 months.</p>
       {% endif %}
-      <p class="meta">Orders sent by email appear here after the office invoices them in QuickBooks.</p>
+      {% if orders %}<p class="meta">Orders sent by email appear here after the office invoices them in QuickBooks.</p>{% endif %}
     </div>
   </div>
   {% include "_qbo_asof.html" %}

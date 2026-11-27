@@ -33,7 +33,7 @@
     </div>
     <nav class="tabs" aria-label="Sections">
       <a href="{{ url_for('catalog') }}"{% if section not in ('customers', 'admin') %} aria-current="page"{% endif %}>Catalog</a>
-      {% if not price_list %}<a href="{{ url_for('customers') }}"{% if section == 'customers' %} aria-current="page"{% endif %}>Customers</a>{% endif %}
+      {% if g.state and has_customers(g.state) %}<a href="{{ url_for('customers') }}"{% if section == 'customers' %} aria-current="page"{% endif %}>Customers</a>{% endif %}
       {% if g.user['is_admin'] %}<a href="{{ url_for('admin_users') }}"{% if section == 'admin' %} aria-current="page"{% endif %}>Admin</a>{% endif %}
     </nav>
   </div>
